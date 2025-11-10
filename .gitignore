@@ -1,0 +1,23 @@
+# .gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+*.egg-info/
+
+# Wandb
+wandb/
+
+# Checkpoints & Logs
+checkpoints/
+logs/
+*.log
+
+# OS-specific
+.DS_Store
+Thumbs.db
