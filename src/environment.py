@@ -115,11 +115,20 @@ class EconomyEnv:
 
         # 3. Return actions dict
         return {
-            "savings": savings_t1,
+            "savings_ratio": savings_t1,
             "mu": mu_t0,
             "labor": labor_t0,
         }
         # raise NotImplementedError("Agent action computation not yet implemented")
+
+    def _taxfunc(self, ibt, abt) -> Tuple[Tensor, Tensor]:
+
+        it = ibt - (1 - self.config.tax_params.tax_income) * \
+            (ibt**(1-self.config.tax_params.income_tax_elasticity)/(1-self.config.tax_params.income_tax_elasticity))
+
+        at = abt - ((1-self.config.tax_params.tax_savings)/(1-self.config.tax_params.saving_tax_elasticity))
+
+        return it, at
 
     def _compute_market_equilibrium(
         self,
@@ -154,14 +163,14 @@ class EconomyEnv:
         ret = A * alpha * (ratio ** (alpha - 1))  # corrected exponent
         return wage, ret
 
-    def _compute_income_and_taxes(
+    def _compute_ibt_moneydisposable(
         self,
         wage: Tensor,
         labor: Tensor,
         ability: Tensor,
         savings: Tensor,
         ret_lagged: Tensor
-    ) -> Dict[str, Tensor]:
+    ) -> Tuple[Tensor, Tensor]:
         """
         Compute income, taxes, and disposable money.
 
@@ -176,15 +185,17 @@ class EconomyEnv:
             outcomes: Dictionary containing:
                 - income_before_tax: (B, A)
                 - money_disposable: (B, A)
-                - income_tax: (B, A)
-                - savings_tax: (B, A)
         """
         # TODO: Implement income and tax computation
         # - Compute income before tax (labor + capital income)
+        ability = torch.clamp(ability, min=0.1)
+        ibt = wage * labor * ability + (1 - self.config.bewley_model.delta + ret_lagged) * savings  # before-tax income
         # - Apply tax functions
+        it, at = self._taxfunc(ibt=ibt, abt=savings)
         # - Compute disposable money
-
-        raise NotImplementedError("Income and tax computation not yet implemented")
+        money_disposable = (ibt-it) + (savings-at) 
+        return money_disposable, ibt
+        # raise NotImplementedError("Income and tax computation not yet implemented")
 
     def create_temporary_state(
         self,
@@ -218,7 +229,7 @@ class EconomyEnv:
             alpha=self.config.bewley_model.alpha
         )
         # 3. Compute income and taxes
-        income_tax_outcomes = self._compute_income_and_taxes(
+        money_disposable, ibt = self._compute_ibt_moneydisposable(
             wage=wage,
             labor=actions["labor"],
             ability=main_state.ability,
@@ -227,8 +238,9 @@ class EconomyEnv:
         )
 
         # 4. Compute consumption
-        consumption = income_tax_outcomes["money_disposable"] * (1.0 - actions["savings_ratio"])
-
+        consumption = money_disposable * (1.0 - actions["savings_ratio"])
+        savings = money_disposable * actions["savings_ratio"]
+        
         # 5. Package into TemporaryState
         temp_state = TemporaryState(
             # Current state (before shocks)
