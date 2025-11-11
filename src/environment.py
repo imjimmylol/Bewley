@@ -465,7 +465,7 @@ class EconomyEnv:
             chosen_branch: "A" or "B"
         """
         if strategy == "random":
-            return "A" if torch.rand(1).item() < 0.5 else "B"
+            return "A" if torch.rand(1, device=self.device).item() < 0.5 else "B"
         elif strategy == "A":
             return "A"
         elif strategy == "B":

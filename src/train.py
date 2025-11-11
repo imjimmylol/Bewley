@@ -38,7 +38,7 @@ def initialize_env_state(config, device="cpu"):
     }
 
     # Expand tax_params to (batch_size, n_params) for batch processing
-    tax_params = torch.tensor(list(tax_params_values.values()), dtype=torch.float32)
+    tax_params = torch.tensor(list(tax_params_values.values()), dtype=torch.float32, device=device)
     tax_params = tax_params.repeat(batch_size, 1)
 
     moneydisposable=np.random.lognormal(0.1, 2.0, batch_size * n_agents).reshape(batch_size, n_agents)
@@ -58,13 +58,13 @@ def initialize_env_state(config, device="cpu"):
     is_superstar_vB = np.zeros((batch_size, n_agents), dtype=bool)
 
     state = MainState(
-        moneydisposable = torch.tensor(moneydisposable, dtype=torch.float32),
-        savings = torch.tensor(savings, dtype=torch.float32),
-        ability = torch.tensor(ability, dtype=torch.float32),
+        moneydisposable = torch.tensor(moneydisposable, dtype=torch.float32, device=device),
+        savings = torch.tensor(savings, dtype=torch.float32, device=device),
+        ability = torch.tensor(ability, dtype=torch.float32, device=device),
         ret = config.bewley_model.r,
         tax_params=tax_params,
-        is_superstar_vA = torch.tensor(is_superstar_vA, dtype=torch.bool),
-        is_superstar_vB = torch.tensor(is_superstar_vB, dtype=torch.bool),
+        is_superstar_vA = torch.tensor(is_superstar_vA, dtype=torch.bool, device=device),
+        is_superstar_vB = torch.tensor(is_superstar_vB, dtype=torch.bool, device=device),
         ability_history_vA=None,
         ability_history_vB=None
     )
@@ -115,7 +115,7 @@ def train(config, run):
         state_dim=2*config.training.agents+2,
         cond_dim=5,
         output_dim=3
-    )
+    ).to(device)
     print(f"✓ EconomyEnv initialized")
     print(f"  - Device: {device}")
     print(f"  - Batch size: {env.batch_size}")

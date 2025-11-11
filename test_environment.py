@@ -271,7 +271,7 @@ def main():
         state_dim=2*config.training.agents+2,
         cond_dim=5,
         output_dim=3
-    )
+    ).to(device)
     # Test 2: Initialize MainState
     main_state = test_main_state_initialization(config, device)
 
