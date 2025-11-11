@@ -97,7 +97,11 @@ class RunningPerAgentWelford:
         return s
 
     def _update_stats(self, s: _PerAgentStats, x: Tensor) -> None:
-        m, mean_b, M2_b = self._reduce_over_batch(x)   # m: scalar (這一批的 B)
+        # CRITICAL: Detach to prevent gradient accumulation in normalizer stats
+        m, mean_b, M2_b = self._reduce_over_batch(x)
+        mean_b = mean_b.detach()  # Statistics should not have gradients
+        M2_b = M2_b.detach()
+
         n = s.count                                    # (A, *feat)
         tot = n + m                                    # broadcast scalar m
 

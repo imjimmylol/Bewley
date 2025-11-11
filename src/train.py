@@ -43,7 +43,16 @@ def initialize_env_state(config, device="cpu"):
 
     moneydisposable=np.random.lognormal(0.1, 2.0, batch_size * n_agents).reshape(batch_size, n_agents)
     savings= np.random.lognormal(0.1, 2.0, batch_size * n_agents).reshape(batch_size, n_agents)
-    ability = np.random.lognormal(0.5, 1.5, batch_size * n_agents).reshape(batch_size, n_agents)
+
+    # Initialize ability from stationary distribution of AR(1) process
+    # AR(1): log(v[t+1]) = (1-rho)*log(v_bar) + rho*log(v[t]) + eps
+    # Stationary: mean = log(v_bar), variance = sigma_v^2 / (1 - rho_v^2)
+    rho_v = config.shock.rho_v
+    sigma_v = config.shock.sigma_v
+    v_bar = config.shock.v_bar
+    ability_log_mean = np.log(v_bar)
+    ability_log_std = sigma_v / np.sqrt(1 - rho_v**2)
+    ability = np.random.lognormal(ability_log_mean, ability_log_std, batch_size * n_agents).reshape(batch_size, n_agents)
 
     is_superstar_vA = np.zeros((batch_size, n_agents), dtype=bool)
     is_superstar_vB = np.zeros((batch_size, n_agents), dtype=bool)
@@ -92,57 +101,150 @@ def train(config, run):
 
     print(f"Checkpoints will be saved in: {base_checkpoint_dir}")
 
-    # --- 2. Initialize models, normalizers, etc. (Example) ---
-    # from src.models import MyModel
-    # from src.normalizer import RunningNormalizer
-    # 
-    # model = MyModel(config.model)
-    # normalizer = RunningNormalizer()
-    normalizer = RunningPerAgentWelford(batch_dim=0, agent_dim=1)
-    env = BewleyEnvironment(config, normalizer, device="cpu")
-    print("\n--- Final Configuration ---")
-    print(f"Learning Rate: {config.training.learning_rate}")
-    print(f"Beta: {config.bewley_model.beta}")
-    if hasattr(config, 'shock') and hasattr(config.shock, 'v_min'):
-        print(f"Shock v_min (computed): {config.shock.v_min:.4f}")
-        print(f"Shock v_max (computed): {config.shock.v_max:.4f}")
-    print("---------------------------\n")
+    # --- 2. Initialize components ---
 
-    # --- 3. Initialize Environment State ---
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = (
+    torch.device("cuda") if torch.cuda.is_available()
+    else torch.device("mps") if torch.backends.mps.is_available()
+    else torch.device("cpu")
+    )
     print(f"Using device: {device}")
+    normalizer = RunningPerAgentWelford(batch_dim=0, agent_dim=1)
+    env = EconomyEnv(config, normalizer, device=device)
+    policy_net = FiLMResNet2In(
+        state_dim=2*config.training.agents+2,
+        cond_dim=5,
+        output_dim=3
+    )
+    print(f"✓ EconomyEnv initialized")
+    print(f"  - Device: {device}")
+    print(f"  - Batch size: {env.batch_size}")
+    print(f"  - Number of agents: {env.n_agents}")
+    print(f"  - History length: {env.history_length}")
 
     # Initialize state
     main_state = initialize_env_state(config, device)
-    policy_net = FiLMResNet2In(
-        state_dim=2*config.training.agents + 2, cond_dim=5,
-        hidden_dim=128, num_res_blocks=3, dropout=0.1,
-        output_dim=3)
     optimizer = torch.optim.Adam(policy_net.parameters(), lr=config.training.learning_rate)
 
-    
+
     # --- 4. Training Loop ---
-    print("Starting dummy training loop...")
+    print("Starting training loop with environment stepping...")
     for step in range(1, config.training.training_steps + 1):
-        # Dummy loss calculation
-        loss = 1.0 / (step + 1e-5) + (1 - config.bewley_model.beta)
-        
+        # ==== STEP THE ENVIRONMENT ====
+        # This performs the full 4-step workflow:
+        # 1. Agents observe MainState[t] and act
+        # 2. Create TemporaryState with realized outcomes
+        # 3. Transition to ParallelState A and B with different shocks
+        # 4. Compute outcomes for both branches, choose one to commit
+
+        main_state, temp_state, (parallel_A, outcomes_A), (parallel_B, outcomes_B) = env.step(
+            main_state=main_state,
+            policy_net=policy_net,
+            deterministic=False,
+            update_normalizer=True,
+            commit_strategy="random"
+        )
+
+        # ==== EXTRACT VARIABLES FOR LOSS COMPUTATION ====
+        # Current period (t) outcomes from TemporaryState
+        consumption_t = temp_state.consumption              # (B, A)
+        labor_t = temp_state.labor                          # (B, A)
+        savings_ratio_t = temp_state.savings_ratio          # (B, A)
+        mu_t = temp_state.mu                                # (B, A)
+        wage_t = temp_state.wage                            # (B, A)
+        ret_t = temp_state.ret                              # (B, A)
+        money_disposable_t = temp_state.money_disposable    # (B, A)
+
+        # Next period (t+1) outcomes from parallel branches
+        consumption_A_tp1 = outcomes_A["consumption"]       # (B, A)
+        consumption_B_tp1 = outcomes_B["consumption"]       # (B, A)
+
+        # ==== COMPUTE LOSSES (PLACEHOLDER - TO BE IMPLEMENTED) ====
+        # Loss 1: Forward-Backward consistency
+        # Ensures savings decision is consistent with Lagrange multiplier
+        # fb_loss = compute_fb_loss(savings_ratio_t, mu_t, money_disposable_t)
+        fb_loss = torch.tensor(0.0, device=device, requires_grad=True)
+
+        # Loss 2: Euler equation
+        # Ensures consumption smoothing between t and t+1
+        # euler_loss = compute_euler_loss(consumption_t, consumption_A_tp1, consumption_B_tp1, ret_t, config)
+        euler_loss = torch.tensor(0.0, device=device, requires_grad=True)
+
+        # Loss 3: Labor FOC
+        # Ensures labor-leisure optimality condition
+        # labor_foc_loss = compute_labor_foc_loss(consumption_t, labor_t, wage_t, main_state.ability, config)
+        labor_foc_loss = torch.tensor(0.0, device=device, requires_grad=True)
+
+        # Total loss
+        total_loss = fb_loss + euler_loss + labor_foc_loss
+
+        # ==== BACKWARD PASS AND PARAMETER UPDATE ====
+        optimizer.zero_grad()
+        total_loss.backward()
+
+        # Optional: gradient clipping
+        # torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=1.0)
+
+        optimizer.step()
+
+        # ==== LOGGING ====
+        # Extract scalar values BEFORE deleting tensors
+        if step % config.training.display_step == 0 or step == 1 or wandb.run:
+            # Convert to Python scalars to avoid holding tensor references
+            loss_total_val = total_loss.item()
+            loss_fb_val = fb_loss.item()
+            loss_euler_val = euler_loss.item()
+            loss_labor_val = labor_foc_loss.item()
+            consumption_mean_val = consumption_t.mean().item()
+            labor_mean_val = labor_t.mean().item()
+            savings_mean_val = main_state.savings.mean().item()
+            ability_mean_val = main_state.ability.mean().item()
+            wage_mean_val = wage_t.mean().item()
+            ret_mean_val = ret_t.mean().item()
+
+        # CRITICAL: Clear temporary variables to prevent memory leaks
+        # Delete tensors that have computational graphs attached
+        del temp_state, parallel_A, parallel_B, outcomes_A, outcomes_B
+        del consumption_t, labor_t, savings_ratio_t, mu_t, wage_t, ret_t, money_disposable_t
+        del consumption_A_tp1, consumption_B_tp1
+        del fb_loss, euler_loss, labor_foc_loss, total_loss
+
+        # Now log using the extracted scalar values
         if step % config.training.display_step == 0 or step == 1:
-            print(f"Step {step}/{config.training.training_steps}, Loss: {loss:.4f}")
+            print(f"\nStep {step}/{config.training.training_steps}")
+            print(f"  Loss: {loss_total_val:.4f} (fb={loss_fb_val:.4f}, euler={loss_euler_val:.4f}, labor={loss_labor_val:.4f})")
+            print(f"  State Statistics:")
+            print(f"    - Mean consumption: {consumption_mean_val:.3f}")
+            print(f"    - Mean labor: {labor_mean_val:.3f}")
+            print(f"    - Mean savings: {savings_mean_val:.3f}")
+            print(f"    - Mean ability: {ability_mean_val:.3f}")
+            print(f"    - Market wage: {wage_mean_val:.3f}")
+            print(f"    - Market return: {ret_mean_val:.4f}")
 
         # Log metrics to wandb
         if wandb.run:
-            wandb.log({"loss": loss, "step": step})
+            wandb.log({
+                "loss/total": loss_total_val,
+                "loss/fb": loss_fb_val,
+                "loss/euler": loss_euler_val,
+                "loss/labor_foc": loss_labor_val,
+                "state/consumption_mean": consumption_mean_val,
+                "state/labor_mean": labor_mean_val,
+                "state/savings_mean": savings_mean_val,
+                "state/ability_mean": ability_mean_val,
+                "market/wage": wage_mean_val,
+                "market/return": ret_mean_val,
+                "step": step
+            })
 
         # --- 5. Save checkpoints periodically (Example) ---
         # if step % config.training.save_interval == 0:
         #     print(f"Saving checkpoint at step {step}...")
-        #     # torch.save(model.state_dict(), os.path.join(weights_dir, f"model_step_{step}.pt"))
-        #     # torch.save(normalizer.state_dict(), os.path.join(normalizer_dir, f"norm_step_{step}.pt"))
-        
-        time.sleep(0.001) # Simulate work
+        #     torch.save(policy_net.state_dict(), os.path.join(weights_dir, f"model_step_{step}.pt"))
+        #     torch.save(main_state, os.path.join(states_dir, f"state_step_{step}.pt"))
+        #     normalizer.save(os.path.join(normalizer_dir, f"norm_step_{step}.pt"))
 
-    print("\nDummy training loop finished.")
+    print("\nTraining loop finished.")
     # --- 6. Final save (Example) ---
     # print("Saving final model...")
     # torch.save(model.state_dict(), os.path.join(weights_dir, "model_final.pt"))

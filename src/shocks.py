@@ -133,6 +133,11 @@ def transition_ability(
     # 5. Clamp to bounds
     ability_tp1 = ability_tp1.clamp(min=v_min, max=v_max)
 
+    # 6. CRITICAL: Detach to prevent gradient accumulation
+    # Ability shocks are exogenous and should not have gradients
+    ability_tp1 = ability_tp1.detach()
+    is_superstar_tp1 = is_superstar_tp1.detach()
+
     return ability_tp1, is_superstar_tp1
 
 
@@ -155,17 +160,21 @@ def update_ability_history(
     Returns:
         ability_history_new: Updated history (L', B, A) where L' <= max_length
     """
+    # CRITICAL: Detach ability_new to prevent gradient accumulation through history
+    ability_new_detached = ability_new.detach()
+
     if ability_history is None:
         # Initialize: repeat current ability max_length times
         # Shape: (max_length, B, A)
-        return ability_new.unsqueeze(0).repeat(max_length, 1, 1)
+        return ability_new_detached.unsqueeze(0).repeat(max_length, 1, 1)
 
     # Append new ability
     # ability_new: (B, A) → (1, B, A)
-    ability_new_expanded = ability_new.unsqueeze(0)
+    ability_new_expanded = ability_new_detached.unsqueeze(0)
 
-    # Concatenate: (L, B, A) + (1, B, A) → (L+1, B, A)
-    history_extended = torch.cat([ability_history, ability_new_expanded], dim=0)
+    # CRITICAL: Detach history to prevent accumulating gradients from past
+    # History is just a record, should not propagate gradients
+    history_extended = torch.cat([ability_history.detach(), ability_new_expanded], dim=0)
 
     # Keep only last max_length entries
     if history_extended.shape[0] > max_length:

@@ -16,6 +16,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from src.utils.buildipnuts import build_inputs
 from src.env_state import MainState, TemporaryState, ParallelState, make_parallel
+from src.shocks import transition_ability_with_history
 
 
 class EconomyEnv:
@@ -86,7 +87,7 @@ class EconomyEnv:
 
     def _compute_agent_actions(
         self,
-        state: MainState,
+        state: MainState | ParallelState,
         policy_net,
         update_normalizer: bool = True
     ) -> Dict[str, Tensor]:
@@ -242,7 +243,6 @@ class EconomyEnv:
             savings=main_state.savings,
             ret_lagged=main_state.ret  # This is ret[t-1]
         )
-
         # 4. Compute consumption
         consumption = income_tax_outcomes["money_disposable"] * (1.0 - actions["savings_ratio"])
         savings = income_tax_outcomes["money_disposable"] * actions["savings_ratio"]
@@ -250,7 +250,7 @@ class EconomyEnv:
         # 5. Package into TemporaryState
         temp_state = TemporaryState(
             # Current state (before shocks)
-            savings=savings, # Savings were updated by the agents action
+            savings=savings, 
             ability=main_state.ability,
 
             # Agent decisions
@@ -308,11 +308,17 @@ class EconomyEnv:
             is_superstar_tp1: Next period superstar status (B, A)
             ability_history_tp1: Updated ability history (L, B, A)
         """
-        # TODO: Implement ability transition
-        # - AR(1) process with superstar dynamics
-        # - Update ability history
+        # Use the transition_ability_with_history function from shocks module
+        ability_tp1, is_superstar_tp1, ability_history_tp1 = transition_ability_with_history(
+            ability_t=ability_t,
+            is_superstar_t=is_superstar_t,
+            ability_history_t=ability_history_t,
+            config=self.config,
+            history_length=self.history_length,
+            deterministic=deterministic
+        )
 
-        raise NotImplementedError("Ability transition not yet implemented")
+        return ability_tp1, is_superstar_tp1, ability_history_tp1
 
     def transition_to_parallel(
         self,
@@ -347,14 +353,14 @@ class EconomyEnv:
         )
 
         # Compute next period savings: savings[t+1] = money_disposable[t] * savings_ratio
-        savings_tp1 = temp_state.money_disposable * temp_state.savings_ratio
+        # savings_tp1 = temp_state.money_disposable * temp_state.savings_ratio 
 
         # Create ParallelState using make_parallel factory
         # Note: We need to create a "dummy" MainState to use make_parallel
         # Or we can construct ParallelState directly
         parallel_state = ParallelState(
             moneydisposable=temp_state.money_disposable,  # Carry forward
-            savings=savings_tp1,  # Updated savings for t+1
+            savings=temp_state.savings,  # Updated savings for t+1
             ability=ability_tp1,  # Transitioned ability
             ret=temp_state.ret,  # Current ret becomes ret[t-1] next period
             tax_params=temp_state.tax_params,
@@ -373,7 +379,7 @@ class EconomyEnv:
         parallel_state: ParallelState,
         policy_net,
         update_normalizer: bool = False
-    ) -> Dict[str, Tensor]:
+    ) -> Tuple[ParallelState, Dict]:
         """
         STEP 3: Compute outcomes for a ParallelState.
 
@@ -391,10 +397,47 @@ class EconomyEnv:
         # Similar to create_temporary_state but for ParallelState
         # 1. Prepare features from parallel_state
         # 2. Get actions from policy_net
+        actions = self._compute_agent_actions(parallel_state, policy_net, update_normalizer=update_normalizer)
         # 3. Compute market equilibrium
+        wage, ret = self._compute_market_equilibrium(
+            savings=parallel_state.savings,
+            labor=actions["labor"],
+            ability=parallel_state.ability,
+            A=self.config.bewley_model.A,
+            alpha=self.config.bewley_model.alpha
+        )
         # 4. Compute income, taxes, consumption
+        income_tax_outcomes = self._compute_income_tax(
+            wage=wage,
+            labor=actions["labor"],
+            ability=parallel_state.ability,
+            savings=parallel_state.savings,
+            ret_lagged=parallel_state.ret  # This is ret[t-1]
+        )
+        consumption = income_tax_outcomes["money_disposable"] * (1.0 - actions["savings_ratio"])
+        savings = income_tax_outcomes["money_disposable"] * actions["savings_ratio"]
 
-        raise NotImplementedError("Parallel state outcomes not yet implemented")
+        updated_parallel = ParallelState(
+            moneydisposable=income_tax_outcomes["money_disposable"],
+            savings=savings, 
+            ability=parallel_state.ability,
+            ret=ret,
+            tax_params=parallel_state.tax_params,
+            is_superstar=parallel_state.is_superstar,
+            ability_history=parallel_state.ability_history
+        )
+
+        outcomes = {
+            "consumption": consumption,
+            "labor": actions["labor"],
+            "wage": wage,
+            "ret": ret,
+            "savings_ratio": actions["savings_ratio"],
+            "mu": actions["mu"],
+        }
+        return updated_parallel, outcomes
+
+        # raise NotImplementedError("Parallel state outcomes not yet implemented")
 
     # ========================================================================
     # STEP 4: Choose branch and commit to MainState
@@ -492,28 +535,28 @@ class EconomyEnv:
             policy_net=policy_net,
             update_normalizer=update_normalizer
         )
-
+        # print(f"!!!!!!!!!!! MD in temporaray State {temp_state.money_disposable.mean()}")
         # STEP 3: Transition to two parallel branches
         parallel_A = self.transition_to_parallel(
             temp_state=temp_state,
             branch="A",
             deterministic=deterministic
         )
-
+        # print(f"!!!!!!!!!!! MD in temporaray State transition 2 Parallel {parallel_A.moneydisposable.mean()}")
         parallel_B = self.transition_to_parallel(
             temp_state=temp_state,
             branch="B",
             deterministic=deterministic
         )
 
-        # STEP 4: Compute outcomes for both branches
-        outcomes_A = self.compute_parallel_outcomes(
+        # STEP 4: Compute outcomes for both branches (returns updated parallel states)
+        parallel_A, outcomes_A = self.compute_parallel_outcomes(
             parallel_state=parallel_A,
             policy_net=policy_net,
             update_normalizer=False  # Don't update normalizer for parallel branches
         )
-
-        outcomes_B = self.compute_parallel_outcomes(
+        # print(f"!!!!!!!!!!! MD in Parallel after action {parallel_A.moneydisposable.mean()}")
+        parallel_B, outcomes_B = self.compute_parallel_outcomes(
             parallel_state=parallel_B,
             policy_net=policy_net,
             update_normalizer=False

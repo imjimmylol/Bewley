@@ -8,6 +8,7 @@ This file demonstrates how to use the EconomyEnv and helps test its functionalit
 import torch
 import torch.nn as nn
 from src.environment import EconomyEnv
+from src.env_state import MainState
 from src.train import initialize_env_state
 from src.normalizer import RunningPerAgentWelford
 from src.utils.configloader import load_configs, dict_to_namespace, compute_derived_params
@@ -129,7 +130,7 @@ def test_parallel_transition(env, temp_state):
         return None, None
 
 
-def test_parallel_outcomes(env, parallel_A, parallel_B):
+def test_parallel_outcomes(env, parallel_A, parallel_B,  policy_net):
     """Test 5: Compute outcomes for ParallelStates."""
     print("\n" + "="*70)
     print("TEST 5: Compute ParallelState Outcomes")
@@ -139,16 +140,14 @@ def test_parallel_outcomes(env, parallel_A, parallel_B):
         print("✗ Skipping (parallel states are None)")
         return None, None
 
-    policy_net = DummyPolicyNetwork()
-
     try:
-        outcomes_A = env.compute_parallel_outcomes(
+        parallel_A, outcomes_A = env.compute_parallel_outcomes(
             parallel_state=parallel_A,
             policy_net=policy_net,
             update_normalizer=False
         )
 
-        outcomes_B = env.compute_parallel_outcomes(
+        parallel_B, outcomes_B = env.compute_parallel_outcomes(
             parallel_state=parallel_B,
             policy_net=policy_net,
             update_normalizer=False
@@ -167,13 +166,11 @@ def test_parallel_outcomes(env, parallel_A, parallel_B):
         return None, None
 
 
-def test_full_step(env, main_state):
+def test_full_step(env, main_state, policy_net):
     """Test 6: Execute full environment step."""
     print("\n" + "="*70)
     print("TEST 6: Full Environment Step")
     print("="*70)
-
-    policy_net = DummyPolicyNetwork()
 
     try:
         # Make a copy of main_state to preserve original
@@ -205,10 +202,11 @@ def test_full_step(env, main_state):
         print(f"\n  MainState before step:")
         print(f"    - savings mean: {main_state.savings.mean():.3f}")
         print(f"    - ability mean: {main_state.ability.mean():.3f}")
+        print(f"    - moneydisposable mean: {main_state.moneydisposable.mean():.5f}")
         print(f"\n  MainState after step:")
         print(f"    - savings mean: {main_state_updated.savings.mean():.3f}")
         print(f"    - ability mean: {main_state_updated.ability.mean():.3f}")
-
+        print(f"    - moneydisposable mean: {main_state_updated.moneydisposable.mean():.5f}")
         return True
 
     except NotImplementedError as e:
@@ -217,13 +215,11 @@ def test_full_step(env, main_state):
         return False
 
 
-def test_rollout(env, main_state):
+def test_rollout(env, main_state, policy_net):
     """Test 7: Execute multi-step rollout."""
     print("\n" + "="*70)
     print("TEST 7: Multi-Step Rollout")
     print("="*70)
-
-    policy_net = DummyPolicyNetwork()
 
     try:
         # Make a copy
@@ -286,14 +282,14 @@ def main():
     parallel_A, parallel_B = test_parallel_transition(env, temp_state)
 
     # Test 5: Compute parallel outcomes
-    outcomes_A, outcomes_B = test_parallel_outcomes(env, parallel_A, parallel_B)
+    outcomes_A, outcomes_B = test_parallel_outcomes(env, parallel_A, parallel_B, net)
 
     # Test 6: Full step
-    step_success = test_full_step(env, main_state)
+    step_success = test_full_step(env, main_state, net)
 
     # Test 7: Rollout (only if step succeeded)
     if step_success:
-        test_rollout(env, main_state)
+        test_rollout(env, main_state, net)
 
     # Summary
     print("\n" + "="*70)
