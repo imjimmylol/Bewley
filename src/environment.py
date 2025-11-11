@@ -126,7 +126,7 @@ class EconomyEnv:
         it = ibt - (1 - self.config.tax_params.tax_income) * \
             (ibt**(1-self.config.tax_params.income_tax_elasticity)/(1-self.config.tax_params.income_tax_elasticity))
 
-        at = abt - ((1-self.config.tax_params.tax_savings)/(1-self.config.tax_params.saving_tax_elasticity))
+        at = abt - ((1-self.config.tax_params.tax_saving)/(1-self.config.tax_params.saving_tax_elasticity))
 
         return it, at
 
@@ -163,14 +163,14 @@ class EconomyEnv:
         ret = A * alpha * (ratio ** (alpha - 1))  # corrected exponent
         return wage, ret
 
-    def _compute_ibt_moneydisposable(
+    def _compute_income_tax(
         self,
         wage: Tensor,
         labor: Tensor,
         ability: Tensor,
         savings: Tensor,
         ret_lagged: Tensor
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> Dict[str, Tensor]:
         """
         Compute income, taxes, and disposable money.
 
@@ -194,7 +194,13 @@ class EconomyEnv:
         it, at = self._taxfunc(ibt=ibt, abt=savings)
         # - Compute disposable money
         money_disposable = (ibt-it) + (savings-at) 
-        return money_disposable, ibt
+
+        return {
+            "money_disposable":money_disposable, 
+            "income_before_tax":ibt,
+            "income_tax":it,
+            "savings_tax":at
+        }
         # raise NotImplementedError("Income and tax computation not yet implemented")
 
     def create_temporary_state(
@@ -229,7 +235,7 @@ class EconomyEnv:
             alpha=self.config.bewley_model.alpha
         )
         # 3. Compute income and taxes
-        money_disposable, ibt = self._compute_ibt_moneydisposable(
+        income_tax_outcomes = self._compute_income_tax(
             wage=wage,
             labor=actions["labor"],
             ability=main_state.ability,
@@ -238,13 +244,13 @@ class EconomyEnv:
         )
 
         # 4. Compute consumption
-        consumption = money_disposable * (1.0 - actions["savings_ratio"])
-        savings = money_disposable * actions["savings_ratio"]
+        consumption = income_tax_outcomes["money_disposable"] * (1.0 - actions["savings_ratio"])
+        savings = income_tax_outcomes["money_disposable"] * actions["savings_ratio"]
         
         # 5. Package into TemporaryState
         temp_state = TemporaryState(
             # Current state (before shocks)
-            savings=main_state.savings,
+            savings=savings, # Savings were updated by the agents action
             ability=main_state.ability,
 
             # Agent decisions
