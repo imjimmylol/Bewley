@@ -2,12 +2,13 @@
 import os
 import wandb
 from datetime import datetime
-import time
+from tqdm import tqdm
 import torch
 from src.env_state import MainState
 from src.environment import EconomyEnv
 from src.normalizer import RunningPerAgentWelford
 from src.models.model import FiLMResNet2In
+from src.calloss import LossCalculator
 import numpy as np
 
 def initialize_env_state(config, device="cpu"):
@@ -124,12 +125,17 @@ def train(config, run):
 
     # Initialize state
     main_state = initialize_env_state(config, device)
-    optimizer = torch.optim.Adam(policy_net.parameters(), lr=config.training.learning_rate)
+    optimizer = torch.optim.Adam(policy_net.parameters(), lr=float(config.training.learning_rate))
 
+    # Initialize loss
+    loss_calculator = LossCalculator(config=config, device=device)
 
     # --- 4. Training Loop ---
     print("Starting training loop with environment stepping...")
-    for step in range(1, config.training.training_steps + 1):
+    # total_steps = config.training.training_steps
+    print(config.tax_params)
+    total_steps = 5
+    for step in tqdm(range(1, total_steps + 1), total=total_steps, desc="Training", ncols=100):
         # ==== STEP THE ENVIRONMENT ====
         # This performs the full 4-step workflow:
         # 1. Agents observe MainState[t] and act
@@ -150,33 +156,39 @@ def train(config, run):
         consumption_t = temp_state.consumption              # (B, A)
         labor_t = temp_state.labor                          # (B, A)
         savings_ratio_t = temp_state.savings_ratio          # (B, A)
+        ibt = temp_state.income_before_tax
         mu_t = temp_state.mu                                # (B, A)
         wage_t = temp_state.wage                            # (B, A)
         ret_t = temp_state.ret                              # (B, A)
         money_disposable_t = temp_state.money_disposable    # (B, A)
+        ability_t = temp_state.ability
 
         # Next period (t+1) outcomes from parallel branches
         consumption_A_tp1 = outcomes_A["consumption"]       # (B, A)
+        income_before_tax_A_tp1 = outcomes_A["income_before_tax"]
         consumption_B_tp1 = outcomes_B["consumption"]       # (B, A)
+        income_before_tax_B_tp1 = outcomes_B["income_before_tax"]
 
         # ==== COMPUTE LOSSES (PLACEHOLDER - TO BE IMPLEMENTED) ====
-        # Loss 1: Forward-Backward consistency
-        # Ensures savings decision is consistent with Lagrange multiplier
-        # fb_loss = compute_fb_loss(savings_ratio_t, mu_t, money_disposable_t)
-        fb_loss = torch.tensor(0.0, device=device, requires_grad=True)
+        
+        loss = loss_calculator.compute_all_losses(
+            # Current period (t)
+            consumption_t = consumption_t,
+            labor_t=labor_t,
+            ibt=ibt,
+            savings_ratio_t=savings_ratio_t,
+            mu_t=mu_t,
+            wage_t=wage_t,
+            ret_t=ret_t,
+            money_disposable_t=money_disposable_t,
+            ability_t=ability_t,
+            # Next period (t+1) - two branches
+            consumption_A_tp1=consumption_A_tp1,
+            consumption_B_tp1=consumption_B_tp1,
+            ibt_A_tp1=income_before_tax_A_tp1,
+            ibt_B_tp1=income_before_tax_B_tp1
+        )
 
-        # Loss 2: Euler equation
-        # Ensures consumption smoothing between t and t+1
-        # euler_loss = compute_euler_loss(consumption_t, consumption_A_tp1, consumption_B_tp1, ret_t, config)
-        euler_loss = torch.tensor(0.0, device=device, requires_grad=True)
-
-        # Loss 3: Labor FOC
-        # Ensures labor-leisure optimality condition
-        # labor_foc_loss = compute_labor_foc_loss(consumption_t, labor_t, wage_t, main_state.ability, config)
-        labor_foc_loss = torch.tensor(0.0, device=device, requires_grad=True)
-
-        # Total loss
-        total_loss = fb_loss + euler_loss + labor_foc_loss
 
         # ==== BACKWARD PASS AND PARAMETER UPDATE ====
         optimizer.zero_grad()
@@ -191,9 +203,9 @@ def train(config, run):
         # Extract scalar values BEFORE deleting tensors
         if step % config.training.display_step == 0 or step == 1 or wandb.run:
             # Convert to Python scalars to avoid holding tensor references
-            loss_total_val = total_loss.item()
-            loss_fb_val = fb_loss.item()
-            loss_euler_val = euler_loss.item()
+            loss_total_val = loss["total"].item()
+            loss_fb_val = loss["fb"].item()
+            loss_euler_val = loss["total"].item()
             loss_labor_val = labor_foc_loss.item()
             consumption_mean_val = consumption_t.mean().item()
             labor_mean_val = labor_t.mean().item()

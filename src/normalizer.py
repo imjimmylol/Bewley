@@ -88,7 +88,8 @@ class RunningPerAgentWelford:
         feat_shape = x_ba.shape[2:]       # 這就是你想要 per-feature 的那塊
         device, dtype = x.device, x.dtype
 
-        count = torch.zeros((A, *feat_shape), device=device, dtype=torch.float64)
+        # Use float32 instead of float64 for MPS compatibility
+        count = torch.zeros((A, *feat_shape), device=device, dtype=torch.float32)
         mean  = torch.zeros((A, *feat_shape), device=device, dtype=dtype)
         M2    = torch.zeros((A, *feat_shape), device=device, dtype=dtype)
 
@@ -139,7 +140,8 @@ class RunningPerAgentWelford:
         mean_b = mean_flat.reshape(A, *feat_shape)
         M2_b   = M2_flat.reshape(A, *feat_shape)
 
-        m = torch.tensor(float(B), device=x.device, dtype=torch.float64)
+        # Use float32 instead of float64 for MPS compatibility
+        m = torch.tensor(float(B), device=x.device, dtype=torch.float32)
         return m, mean_b, M2_b
 
     @staticmethod

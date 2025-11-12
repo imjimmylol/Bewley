@@ -1,10 +1,20 @@
 # Device Consistency Fixes
 
-## Problem
+## Problems
+
+### 1. Device Mismatch
 Tensors created on different devices (CPU vs CUDA/MPS) cause runtime errors like:
 ```
 RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cpu and cuda:0!
 ```
+
+### 2. MPS float64 Incompatibility
+MPS (Apple Silicon) doesn't support float64:
+```
+TypeError: Cannot convert a MPS Tensor to float64 dtype as the MPS framework doesn't support float64. Please use float32 instead.
+```
+
+**See `MPS_COMPATIBILITY_FIX.md` for detailed fix of the float64 issue.**
 
 ## Issues Found and Fixed
 

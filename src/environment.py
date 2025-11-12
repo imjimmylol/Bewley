@@ -417,6 +417,7 @@ class EconomyEnv:
         consumption = income_tax_outcomes["money_disposable"] * (1.0 - actions["savings_ratio"])
         savings = income_tax_outcomes["money_disposable"] * actions["savings_ratio"]
 
+        # No ibt in ParallelState, however it is thus more clean for commit 
         updated_parallel = ParallelState(
             moneydisposable=income_tax_outcomes["money_disposable"],
             savings=savings, 
@@ -434,6 +435,7 @@ class EconomyEnv:
             "ret": ret,
             "savings_ratio": actions["savings_ratio"],
             "mu": actions["mu"],
+            "income_before_tax": income_tax_outcomes["income_before_tax"]
         }
         return updated_parallel, outcomes
 
