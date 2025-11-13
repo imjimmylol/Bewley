@@ -23,9 +23,9 @@ bewley_model:
 tax_params:
   tax_consumption: 0.065
   tax_income: 0.2
-  tax_saving: 0.1
+  tax_saving: 0
   income_tax_elasticity: 0.5
-  saving_tax_elasticity: 0.5
+  saving_tax_elasticity: 0
 
 
 shock:

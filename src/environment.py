@@ -114,6 +114,12 @@ class EconomyEnv:
         savings_t1, mu_t0, labor_t0 = [acts[i](out[..., i]) for i in range(out.shape[-1])]
         savings_t1, mu_t0, labor_t0 = savings_t1.squeeze(-1), mu_t0.squeeze(-1), labor_t0.squeeze(-1)
 
+        # CRITICAL: Enforce minimum labor and savings to prevent collapse
+        # Labor in [0.01, 0.99] instead of [0, 1]
+        labor_t0 = labor_t0 * 0.98 + 0.01
+        # Savings ratio in [0.01, 0.99] instead of [0, 1]
+        savings_t1 = savings_t1 * 0.98 + 0.01
+
         # 3. Return actions dict
         return {
             "savings_ratio": savings_t1,
@@ -153,15 +159,25 @@ class EconomyEnv:
         """
         savings_agg = savings.mean(dim=1, keepdim=True)
         labor_eff_agg = (labor * ability).mean(dim=1, keepdim=True)
-        
-        # avoid zero or negative denominators
-        labor_eff_agg = torch.clamp(labor_eff_agg, min=1e-8)
-        
+
+        # CRITICAL: Enforce strong floors to prevent collapse
+        # With labor >= 0.01 from policy bounds, this ensures labor_eff >= 0.01 * v_bar
+        labor_eff_agg = torch.clamp(labor_eff_agg, min=0.01)
+        savings_agg = torch.clamp(savings_agg, min=0.01)
+
+        # Capital-labor ratio with bounds to prevent extreme prices
         ratio = savings_agg / labor_eff_agg
-        ratio = torch.clamp(ratio, min=1e-8)
-        
+        ratio = torch.clamp(ratio, min=0.1, max=10.0)  # Bounded K/L ratio
+
+        # Compute prices from Cobb-Douglas production
         wage = A * (1 - alpha) * (ratio ** alpha)
-        ret = A * alpha * (ratio ** (alpha - 1))  # corrected exponent
+        ret = A * alpha * (ratio ** (alpha - 1))
+
+        # CRITICAL: Clip prices to economically reasonable ranges
+        # Prevents gradient explosion from extreme return values in Euler equation
+        ret = torch.clamp(ret, min=0.0, max=0.5)  # Max 50% annual return
+        wage = torch.clamp(wage, min=0.1, max=10.0)  # Reasonable wage range
+
         return wage, ret
 
     def _compute_income_tax(

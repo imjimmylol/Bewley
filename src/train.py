@@ -160,6 +160,7 @@ def train(config, run):
         ret_t = temp_state.ret                              # (B, A)
         money_disposable_t = temp_state.money_disposable    # (B, A)
         ability_t = temp_state.ability
+        savings_t = temp_state.savings  # Savings for t+1 (allocated from budget at t)
 
         # Next period (t+1) outcomes from parallel branches
         consumption_A_tp1 = outcomes_A["consumption"]       # (B, A)
@@ -235,10 +236,17 @@ def train(config, run):
             money_raw_std = main_state.moneydisposable.std().item()
             ability_raw_std = main_state.ability.std().item()
 
+            # VERIFY BUDGET CONSTRAINT: consumption[t] + savings[t+1] = money_disposable[t]
+            money_disposable_t_mean_val = money_disposable_t.mean().item()
+            savings_t_mean_val = savings_t.mean().item()
+            sav_plus_cons_val = savings_t_mean_val + consumption_mean_val
+            budget_diff_val = money_disposable_t_mean_val - sav_plus_cons_val
+            budget_ratio_val = sav_plus_cons_val / money_disposable_t_mean_val if abs(money_disposable_t_mean_val) > 1e-8 else 0.0
+
         # CRITICAL: Clear temporary variables to prevent memory leaks
         # Delete tensors that have computational graphs attached
         del temp_state, parallel_A, parallel_B, outcomes_A, outcomes_B
-        del consumption_t, labor_t, savings_ratio_t, mu_t, wage_t, ret_t, money_disposable_t
+        del consumption_t, labor_t, savings_ratio_t, mu_t, wage_t, ret_t, money_disposable_t, savings_t
         del consumption_A_tp1, consumption_B_tp1, ibt, ability_t
         del income_before_tax_A_tp1, income_before_tax_B_tp1
         # Delete normalized features (no gradient, but still takes memory)
@@ -262,6 +270,13 @@ def train(config, run):
             print(f"    - Normalized ability: mean={normalized_ability_mean:.3f}, std={normalized_ability_std:.3f}")
             print(f"    - Raw money: mean={money_raw_mean:.3f}, std={money_raw_std:.3f}")
             print(f"    - Raw ability: mean={ability_raw_mean:.3f}, std={ability_raw_std:.3f}")
+            print(f"  Budget Constraint Verification:")
+            print(f"    - Money disposable[t]: {money_disposable_t_mean_val:.3f}")
+            print(f"    - Consumption[t]: {consumption_mean_val:.3f}")
+            print(f"    - Savings[t+1]: {savings_t_mean_val:.3f}")
+            print(f"    - Savings + Consumption: {sav_plus_cons_val:.3f}")
+            print(f"    - Difference (should be ~0): {budget_diff_val:.6f}")
+            print(f"    - Ratio (should be ~1.0): {budget_ratio_val:.6f}")
 
         # Log metrics to wandb
         if wandb.run:
@@ -274,6 +289,10 @@ def train(config, run):
                 "state/labor_mean": labor_mean_val,
                 "state/savings_mean": savings_mean_val,
                 "state/ability_mean": ability_mean_val,
+                "state/money_disposable_mean": money_disposable_t_mean_val,
+                "state/savings_plus_consumption": sav_plus_cons_val,
+                "state/budget_difference": budget_diff_val,
+                "state/budget_ratio": budget_ratio_val,
                 "market/wage": wage_mean_val,
                 "market/return": ret_mean_val,
                 # Normalized network inputs (for debugging)

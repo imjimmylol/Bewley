@@ -258,7 +258,7 @@ class LaborFOCLoss:
             loss: scalar
         """
         labor_term = -self._safe_pow(labor, self.gamma)
-        cons_term = -self._safe_pow(consumption, -self.theta) / (1.0 + self.taxparams.tax_saving)
+        cons_term = self._safe_pow(consumption, -self.theta) / (1.0 + self.taxparams.tax_saving)  # FIXED: Removed negative sign
         ibt_term = self._safe_pow(ibt, -self.taxparams.income_tax_elasticity)
         tax_factor = (1.0 - self.taxparams.tax_income) * ibt_term
         prod_term = torch.clamp(wage * ability * tax_factor, min=-self.clip_val, max=self.clip_val)
