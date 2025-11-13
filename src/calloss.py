@@ -46,7 +46,7 @@ class LossCalculator:
         self.tax_params = config.tax_params
         # Loss weights (can be made configurable)
         self.weight_fb = getattr(config.training, 'weight_fb', 1.0)
-        self.weight_euler = getattr(config.training, 'weight_euler', 1.0)
+        self.weight_aux_mu = getattr(config.training, 'weight_aux_mu', 1.0)
         self.weight_labor = getattr(config.training, 'weight_labor', 1.0)
 
         # Numerical stability
@@ -54,7 +54,7 @@ class LossCalculator:
 
         # Initialize individual loss components
         self.fb_loss_fn = FBLoss(eps=self.eps)
-        self.euler_loss_fn = AuxLossMu(taxparams=self.tax_params, beta=self.beta, theta=self.theta, delta=self.delta, eps=self.eps)
+        self.aux_loss_mu_fn = AuxLossMu(taxparams=self.tax_params, beta=self.beta, theta=self.theta, eps=self.eps)
         self.labor_loss_fn = LaborFOCLoss(taxparams=self.tax_params, theta=self.theta, gamma=self.gamma, eps=self.eps)
 
     def compute_all_losses(
@@ -96,8 +96,8 @@ class LossCalculator:
             mu=mu_t,
         )
 
-        # 2. Euler equation loss
-        euler_loss = self.euler_loss_fn(
+        # 2. Auxilary loss of multiplier
+        aux_loss_mu = self.aux_loss_mu_fn(
             c0=consumption_t,
             mu0=mu_t,
             ret0=ret_t,
@@ -114,24 +114,23 @@ class LossCalculator:
             ibt=ibt,
             wage=wage_t,
             labor=labor_t,
-            wage=wage_t,
             ability=ability_t
         )
 
         # Apply weights
         fb_loss_weighted = self.weight_fb * fb_loss
-        euler_loss_weighted = self.weight_euler * euler_loss
+        aux_mu_loss_weighted = self.weight_aux_mu * aux_loss_mu
         labor_loss_weighted = self.weight_labor * labor_loss
 
         # Total loss
-        total_loss = fb_loss_weighted + euler_loss_weighted + labor_loss_weighted
+        total_loss = fb_loss_weighted + aux_mu_loss_weighted + labor_loss_weighted
 
         return {
             "fb": fb_loss,
-            "euler": euler_loss,
+            "aux_mu": aux_loss_mu,
             "labor": labor_loss,
             "fb_weighted": fb_loss_weighted,
-            "euler_weighted": euler_loss_weighted,
+            "aux_mu_loss_weighted": aux_mu_loss_weighted,
             "labor_weighted": labor_loss_weighted,
             "total": total_loss
         }
@@ -200,7 +199,7 @@ class AuxLossMu:
         
         eulerloss = self.beta * self._safe_pow(cons_ratio, -self.theta) * \
             (ret0 * (1-self.taxparams.tax_income) * inc_term) +\
-            (1-self.taxparams.tax_savings) * save_term - mu0
+            (1-self.taxparams.tax_saving) * save_term - mu0
         return eulerloss
 
     def __call__(self, c0, mu0, ret0, savings_tp, c1_A, c1_B, ibt_A, ibt_B):
@@ -225,13 +224,14 @@ class LaborFOCLoss:
     Robust version keeps equilibrium point identical but clamps extreme values.
     """
 
-    def __init__(self, tax_params: Namespace, theta: float, gamma: float, eps: float = 1e-8, base: float = 1, clip_val: float=1e4):
-        self.taxparams = tax_params
+    def __init__(self, taxparams: Namespace, theta: float, gamma: float, eps: float = 1e-8, base: float = 1, clip_val: float=1e4, scale: float=1):
+        self.taxparams = taxparams
         self.theta = theta
         self.gamma = gamma
         self.eps = eps
         self.base = base
         self.clip_val = clip_val
+        self.scale = scale
 
     def _safe_pow(self, base, exp):
         base = torch.clamp(torch.abs(base / self.scale), min=self.eps, max=self.clip_val)
@@ -258,12 +258,14 @@ class LaborFOCLoss:
             loss: scalar
         """
         labor_term = -self._safe_pow(labor, self.gamma)
-        cons_term = -self._safe_pow(consumption, -self.theta) / (1.0 + self.taxparams.tax_savings)
+        cons_term = -self._safe_pow(consumption, -self.theta) / (1.0 + self.taxparams.tax_saving)
         ibt_term = self._safe_pow(ibt, -self.taxparams.income_tax_elasticity)
         tax_factor = (1.0 - self.taxparams.tax_income) * ibt_term
         prod_term = torch.clamp(wage * ability * tax_factor, min=-self.clip_val, max=self.clip_val)
         loss_foc = labor_term + cons_term * prod_term
         # --- clean up NaN / Inf ---
         loss_foc = torch.nan_to_num(loss_foc, nan=0.0, posinf=self.clip_val, neginf=-self.clip_val)
-        return loss_foc
+
+        # CRITICAL: Return scalar by taking mean
+        return torch.mean(loss_foc ** 2)
 

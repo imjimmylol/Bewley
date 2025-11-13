@@ -132,9 +132,7 @@ def train(config, run):
 
     # --- 4. Training Loop ---
     print("Starting training loop with environment stepping...")
-    # total_steps = config.training.training_steps
-    print(config.tax_params)
-    total_steps = 5
+    total_steps = config.training.training_steps
     for step in tqdm(range(1, total_steps + 1), total=total_steps, desc="Training", ncols=100):
         # ==== STEP THE ENVIRONMENT ====
         # This performs the full 4-step workflow:
@@ -169,6 +167,23 @@ def train(config, run):
         consumption_B_tp1 = outcomes_B["consumption"]       # (B, A)
         income_before_tax_B_tp1 = outcomes_B["income_before_tax"]
 
+        # ==== EXTRACT NORMALIZED FEATURES FOR DEBUGGING ====
+        # Get normalized features that were fed to the policy network
+        # These are computed internally during env.step()
+        with torch.no_grad():
+            normalized_features, _ = env._prepare_features(main_state, update_normalizer=False)
+            # Extract individual normalized features from the stacked tensor
+            # normalized_features shape: (B, A, 2A+2)
+            # Structure: [all_money (2A), money_self (1), all_ability (2A), ability_self (1)]
+            # Wait, need to check actual structure from buildipnuts.py
+            # From buildipnuts: features = [sum_info_rep (2A), money_self (1), ability_self (1)]
+            # So shape is (B, A, 2A+2)
+
+            normalized_money_mean = normalized_features[..., -2].mean().item()  # money_self
+            normalized_ability_mean = normalized_features[..., -1].mean().item()  # ability_self
+            normalized_money_std = normalized_features[..., -2].std().item()
+            normalized_ability_std = normalized_features[..., -1].std().item()
+
         # ==== COMPUTE LOSSES (PLACEHOLDER - TO BE IMPLEMENTED) ====
         
         loss = loss_calculator.compute_all_losses(
@@ -192,7 +207,7 @@ def train(config, run):
 
         # ==== BACKWARD PASS AND PARAMETER UPDATE ====
         optimizer.zero_grad()
-        total_loss.backward()
+        loss["total"].backward()
 
         # Optional: gradient clipping
         # torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=1.0)
@@ -205,8 +220,8 @@ def train(config, run):
             # Convert to Python scalars to avoid holding tensor references
             loss_total_val = loss["total"].item()
             loss_fb_val = loss["fb"].item()
-            loss_euler_val = loss["total"].item()
-            loss_labor_val = labor_foc_loss.item()
+            loss_aux_mu_val = loss["aux_mu"].item()
+            loss_labor_val = loss["labor"].item()
             consumption_mean_val = consumption_t.mean().item()
             labor_mean_val = labor_t.mean().item()
             savings_mean_val = main_state.savings.mean().item()
@@ -214,17 +229,27 @@ def train(config, run):
             wage_mean_val = wage_t.mean().item()
             ret_mean_val = ret_t.mean().item()
 
+            # Raw (unnormalized) state values for debugging
+            money_raw_mean = main_state.moneydisposable.mean().item()
+            ability_raw_mean = main_state.ability.mean().item()
+            money_raw_std = main_state.moneydisposable.std().item()
+            ability_raw_std = main_state.ability.std().item()
+
         # CRITICAL: Clear temporary variables to prevent memory leaks
         # Delete tensors that have computational graphs attached
         del temp_state, parallel_A, parallel_B, outcomes_A, outcomes_B
         del consumption_t, labor_t, savings_ratio_t, mu_t, wage_t, ret_t, money_disposable_t
-        del consumption_A_tp1, consumption_B_tp1
-        del fb_loss, euler_loss, labor_foc_loss, total_loss
+        del consumption_A_tp1, consumption_B_tp1, ibt, ability_t
+        del income_before_tax_A_tp1, income_before_tax_B_tp1
+        # Delete normalized features (no gradient, but still takes memory)
+        del normalized_features
+        # Delete all individual losses from the loss dict
+        del loss 
 
         # Now log using the extracted scalar values
         if step % config.training.display_step == 0 or step == 1:
             print(f"\nStep {step}/{config.training.training_steps}")
-            print(f"  Loss: {loss_total_val:.4f} (fb={loss_fb_val:.4f}, euler={loss_euler_val:.4f}, labor={loss_labor_val:.4f})")
+            print(f"  Loss: {loss_total_val:.4f} (fb={loss_fb_val:.4f}, euler={loss_aux_mu_val:.4f}, labor={loss_labor_val:.4f})")
             print(f"  State Statistics:")
             print(f"    - Mean consumption: {consumption_mean_val:.3f}")
             print(f"    - Mean labor: {labor_mean_val:.3f}")
@@ -232,13 +257,18 @@ def train(config, run):
             print(f"    - Mean ability: {ability_mean_val:.3f}")
             print(f"    - Market wage: {wage_mean_val:.3f}")
             print(f"    - Market return: {ret_mean_val:.4f}")
+            print(f"  Normalized Network Inputs (debugging):")
+            print(f"    - Normalized money: mean={normalized_money_mean:.3f}, std={normalized_money_std:.3f}")
+            print(f"    - Normalized ability: mean={normalized_ability_mean:.3f}, std={normalized_ability_std:.3f}")
+            print(f"    - Raw money: mean={money_raw_mean:.3f}, std={money_raw_std:.3f}")
+            print(f"    - Raw ability: mean={ability_raw_mean:.3f}, std={ability_raw_std:.3f}")
 
         # Log metrics to wandb
         if wandb.run:
             wandb.log({
                 "loss/total": loss_total_val,
                 "loss/fb": loss_fb_val,
-                "loss/euler": loss_euler_val,
+                "loss/aux_mu": loss_aux_mu_val,
                 "loss/labor_foc": loss_labor_val,
                 "state/consumption_mean": consumption_mean_val,
                 "state/labor_mean": labor_mean_val,
@@ -246,6 +276,15 @@ def train(config, run):
                 "state/ability_mean": ability_mean_val,
                 "market/wage": wage_mean_val,
                 "market/return": ret_mean_val,
+                # Normalized network inputs (for debugging)
+                "debug/normalized_money_mean": normalized_money_mean,
+                "debug/normalized_ability_mean": normalized_ability_mean,
+                "debug/normalized_money_std": normalized_money_std,
+                "debug/normalized_ability_std": normalized_ability_std,
+                "debug/raw_money_mean": money_raw_mean,
+                "debug/raw_ability_mean": ability_raw_mean,
+                "debug/raw_money_std": money_raw_std,
+                "debug/raw_ability_std": ability_raw_std,
                 "step": step
             })
 
@@ -259,4 +298,4 @@ def train(config, run):
     print("\nTraining loop finished.")
     # --- 6. Final save (Example) ---
     # print("Saving final model...")
-    # torch.save(model.state_dict(), os.path.join(weights_dir, "model_final.pt"))
+    # torch.save(policy_net.state_dict(), os.path.join(weights_dir, "model_final.pt"))
