@@ -20,6 +20,8 @@ This folder contains documentation files created during the Claude Code session 
 | `LOSS_DESIGN.md` | Complete loss calculation module design and implementation |
 | `LOGGING_GUIDE.md` | Training metrics and normalized input logging guide |
 | `BATCH_TRAINING_GUIDE.md` | Guide for running all config files with shell scripts |
+| `TAX_RETURN_DEBUGGING.md` | **NEW**: Systematic testing for tax distortion & return clipping issues |
+| `CONSUMPTION_SAVINGS_ISSUE_CHECKLIST.md` | Diagnostic checklist for consumption/savings imbalances |
 
 ### Stability Improvements
 
@@ -79,6 +81,8 @@ If you're new to this codebase or troubleshooting issues, read in this order:
 - Device errors? → `DEVICE_FIXES.md`
 - MPS errors? → `MPS_COMPATIBILITY_FIX.md`
 - Training diverges? → `LABOR_COLLAPSE_FIX.md` + `NORMALIZATION_ISSUES.md`
+- Under-saving (consumption >> savings)? → `TAX_RETURN_DEBUGGING.md`
+- Over-saving (savings >> consumption)? → `CONSUMPTION_SAVINGS_ISSUE_CHECKLIST.md`
 
 ---
 
