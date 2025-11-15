@@ -46,7 +46,7 @@ at = abt - ((1-tax_saving) / (1-eps_s))
 
 ### Run Command:
 ```bash
-python main.py --configs config/default.yaml
+python main.py --configs config/baseline.yaml
 ```
 
 ### Metrics to Record:

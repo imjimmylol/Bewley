@@ -91,10 +91,90 @@ class RunningPerAgentWelford:
         self.min_std = float(sd.get("min_std", 0.01))  # Default for backward compatibility
         self.momentum = float(sd.get("momentum", 0.99))
         self.clip_range = float(sd.get("clip_range", 10.0))
-        # 真正的 stats 形狀要等到下一次看到同名的 x 才能初始化，
-        # 所以這裡先放著
+
+        # Reconstruct stats from state dict
         self._stats = {}
-        # 如果你想要連 stats 一起塞回去，也可以在這裡把 key 掃一遍組回去
+        # Find all unique stat names by looking for keys ending in .count, .mean, .M2
+        stat_names = set()
+        for key in sd.keys():
+            if key.endswith(".count") or key.endswith(".mean") or key.endswith(".M2"):
+                stat_name = key.rsplit(".", 1)[0]
+                stat_names.add(stat_name)
+
+        # Reconstruct each stat
+        for name in stat_names:
+            self._stats[name] = _PerAgentStats(
+                count=sd[f"{name}.count"],
+                mean=sd[f"{name}.mean"],
+                M2=sd[f"{name}.M2"]
+            )
+
+    def save(self, path: str) -> None:
+        """
+        Save normalizer state to file.
+
+        Args:
+            path: File path to save to (e.g., 'checkpoints/run_name/normalizer/norm_step_100.pt')
+        """
+        torch.save(self.state_dict(), path)
+
+    def load(self, path: str) -> None:
+        """
+        Load normalizer state from file.
+
+        Args:
+            path: File path to load from
+        """
+        state_dict = torch.load(path, map_location='cpu')  # Load to CPU first for device flexibility
+        self.load_state_dict(state_dict)
+
+    def to(self, device):
+        """
+        Move all internal statistics to the specified device.
+
+        Args:
+            device: Target device (e.g., 'cpu', 'cuda', 'mps')
+
+        Returns:
+            self (for method chaining)
+        """
+        for name, stats in self._stats.items():
+            stats.count = stats.count.to(device)
+            stats.mean = stats.mean.to(device)
+            stats.M2 = stats.M2.to(device)
+        return self
+
+    @classmethod
+    def from_file(cls, path: str, device='cpu') -> 'RunningPerAgentWelford':
+        """
+        Create a new normalizer instance from a saved file.
+
+        Args:
+            path: File path to load from
+            device: Device to load tensors to (default: 'cpu')
+
+        Returns:
+            RunningPerAgentWelford: Loaded normalizer instance
+        """
+        state_dict = torch.load(path, map_location=device)
+
+        # Create new instance with saved hyperparameters
+        normalizer = cls(
+            batch_dim=int(state_dict["batch_dim"]),
+            agent_dim=int(state_dict["agent_dim"]),
+            eps=float(state_dict["eps"]),
+            min_std=float(state_dict.get("min_std", 0.01)),
+            momentum=float(state_dict.get("momentum", 0.99)),
+            clip_range=float(state_dict.get("clip_range", 10.0))
+        )
+
+        # Load the statistics
+        normalizer.load_state_dict(state_dict)
+
+        # Ensure all stats are on the correct device
+        normalizer.to(device)
+
+        return normalizer
 
     # ----------------- internal helpers -----------------
     def _move_to_ba(self, x: Tensor) -> Tensor:

@@ -196,10 +196,12 @@ class AuxLossMu:
         cons_ratio = self._safe_ratio(c1, c0)
         inc_term = self._safe_pow(ibt_parallel, self.taxparams.income_tax_elasticity)
         save_term = self._safe_pow(savings_tp, self.taxparams.income_tax_elasticity)
+
+        term1 = self.beta * self._safe_pow(cons_ratio, -self.theta)
+        term2 = ret0 * (1-self.taxparams.tax_income) * inc_term
+        term3 = 1-(1-self.taxparams.tax_saving) * save_term
         
-        eulerloss = self.beta * self._safe_pow(cons_ratio, -self.theta) * \
-            (ret0 * (1-self.taxparams.tax_income) * inc_term) +\
-            (1-self.taxparams.tax_saving) * save_term - mu0
+        eulerloss = mu0-term1*(term2+term3)
         return eulerloss
 
     def __call__(self, c0, mu0, ret0, savings_tp, c1_A, c1_B, ibt_A, ibt_B):

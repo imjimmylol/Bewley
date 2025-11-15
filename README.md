@@ -87,25 +87,93 @@ In this case, `learning_rate` will be `5e-4`, while other parameters are taken f
 
 ### 2. Hyperparameter Sweep with W&B
 
-This mode uses Weights & Biases to automatically run multiple experiments to find the best hyperparameters.
+Sweeps allow you to automatically run multiple experiments with different hyperparameter combinations. This is useful for hyperparameter tuning and exploring the parameter space.
 
-**Step 1: Initialize the Sweep**
+**Step 1: Create or modify a sweep configuration**
 
-Tell W&B to create a new sweep based on your configuration file.
+The sweep configuration is defined in `sweepconfig/default_sweep.yaml`. You can modify this file or create a new one. The configuration specifies:
+- Which parameters to sweep over
+- The sweep method (grid, random, or Bayesian optimization)
+- The metric to optimize
+
+Example sweep configuration:
+```yaml
+program: main.py
+method: grid  # Options: grid, random, bayes
+metric:
+  name: loss/total
+  goal: minimize
+
+parameters:
+  training:
+    parameters:
+      learning_rate:
+        values: [1e-3, 5e-4, 1e-4]
+      batch_size:
+        values: [128, 256]
+  bewley_model:
+    parameters:
+      beta:
+        values: [0.97, 0.975, 0.98]
+```
+
+**Step 2: Initialize the sweep**
 
 ```bash
 wandb sweep sweepconfig/default_sweep.yaml
 ```
 
-W&B will output a command with a unique **sweep ID**. It will look like this:
-`wandb agent <YOUR_ENTITY>/<YOUR_PROJECT>/<SWEEP_ID>`
-
-**Step 2: Run the W&B Agent**
-
-Copy the command from the previous step and run it in your terminal.
-
-```bash
-wandb agent <YOUR_ENTITY>/<YOUR_PROJECT>/<SWEEP_ID>
+This command will create a sweep on W&B and output a sweep ID. You'll see something like:
+```
+wandb: Creating sweep from: sweepconfig/default_sweep.yaml
+wandb: Creating sweep with ID: neujkn8c
+wandb: View sweep at: https://wandb.ai/zhinghe78-uccu/Bewley/sweeps/neujkn8c
+wandb: Run sweep agent with: wandb agent zhinghe78-uccu/Bewley/neujkn8c
 ```
 
-The agent will now start executing `main.py` repeatedly with different hyperparameter combinations defined in `default_sweep.yaml`. You can view the results in real-time on your W&B dashboard.
+**Step 3: Run the sweep agent**
+
+Copy the agent command from the previous step and run it:
+```bash
+wandb agent zhinghe78-uccu/Bewley/neujkn8c
+```
+
+The agent will automatically run experiments with different hyperparameter combinations. Each run will:
+- Get a unique auto-generated name (e.g., "divine-sweep-1", "cosmic-sweep-2")
+- Save checkpoints to separate directories: `checkpoints/<run_name>/`
+- Log metrics to W&B for comparison
+
+**Step 4 (Optional): Run multiple agents in parallel**
+
+To speed up the sweep, you can run multiple agents in parallel. Simply open additional terminal windows and run the same agent command:
+
+```bash
+# Terminal 1
+wandb agent your-entity/Bewley-Project-Example/abc123def
+
+# Terminal 2
+wandb agent your-entity/Bewley-Project-Example/abc123def
+
+# Terminal 3
+wandb agent your-entity/Bewley-Project-Example/abc123def
+```
+
+Each agent will pick up different parameter combinations from the sweep queue and run them in parallel.
+
+**Viewing sweep results:**
+
+Navigate to the W&B sweep URL (printed in Step 2) to view:
+- Parallel coordinates plot showing parameter relationships
+- Metrics comparison across all runs
+- Best performing configurations ranked by your chosen metric
+
+**Sweep methods:**
+
+- **`grid`**: Exhaustively tries all combinations of parameters
+- **`random`**: Randomly samples parameter combinations (add `count: N` to limit runs)
+- **`bayes`**: Uses Bayesian optimization to intelligently search the parameter space
+
+**Note on checkpoints during sweeps:**
+
+During sweeps, the `exp_name` from config files is automatically ignored to prevent checkpoint conflicts. Each sweep run gets its own unique checkpoint directory based on the auto-generated run name.
+

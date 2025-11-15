@@ -167,16 +167,22 @@ class EconomyEnv:
 
         # Capital-labor ratio with bounds to prevent extreme prices
         ratio = savings_agg / labor_eff_agg
-        ratio = torch.clamp(ratio, min=0.1, max=10.0)  # Bounded K/L ratio
+        # ratio = torch.clamp(ratio, min=0.1, max=10.0)  # Bounded K/L ratio
 
         # Compute prices from Cobb-Douglas production
         wage = A * (1 - alpha) * (ratio ** alpha)
         ret = A * alpha * (ratio ** (alpha - 1))
 
+        # DEBUG: Check if reach clamp val
+        # ratio_raw = savings_agg / labor_eff_agg
+        # print(f"Raw K/L ratio: {ratio_raw.mean():.4f}")
+        # ratio = torch.clamp(ratio_raw, min=0.1, max=10.0)
+        # print(f"Clamped K/L ratio: {ratio.mean():.4f}")
+
         # CRITICAL: Clip prices to economically reasonable ranges
         # Prevents gradient explosion from extreme return values in Euler equation
-        ret = torch.clamp(ret, min=0.0, max=0.5)  # Max 50% annual return
-        wage = torch.clamp(wage, min=0.1, max=10.0)  # Reasonable wage range
+        # ret = torch.clamp(ret, min=0.0, max=2)  # Max 50% annual return
+        # wage = torch.clamp(wage, min=0.1, max=10.0)  # Reasonable wage range
 
         return wage, ret
 

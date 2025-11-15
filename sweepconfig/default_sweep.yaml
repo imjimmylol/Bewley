@@ -3,22 +3,45 @@
 # Usage:
 # 1. Login to wandb: `wandb login`
 # 2. Initialize the sweep: `wandb sweep sweepconfig/default_sweep.yaml`
-# 3. Run the agent: `wandb agent <entity>/<project>/<sweep_id>`
+# 3. Run the agent: `wandb agent <sweep_id>` (copy sweep_id from step 2)
+# 4. To run multiple agents in parallel: open multiple terminals and run the same agent command
+#
+# Notes:
+# - Each sweep run will get a unique auto-generated name (e.g., "divine-sweep-1")
+# - Checkpoints will be saved to separate directories: checkpoints/<run_name>/
+# - The 'exp_name' from config files is ignored during sweeps to prevent conflicts
 
 program: main.py
-method: grid
+method: grid  # Options: grid, random, bayes
 metric:
-  name: loss
+  name: loss/total  # Metric to optimize (must match wandb.log key)
   goal: minimize
 
+# Command to pass base config (optional, can override in agent command)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "--configs"
+  - "config/baseline.yaml"  # Base config file
+
 parameters:
-  training:
-    parameters:
-      learning_rate:
-        values: [1e-3, 5e-4, 1e-4]
-      batch_size:
-        values: [128, 256]
+  # Sweep over training hyperparameters
+  # training:
+  #   parameters:
+  #     learning_rate:
+  #       values: [1e-3, 5e-4, 1e-4]
+  #     batch_size:
+  #       values: [128, 256]
+
+  # Sweep over model parameters
   bewley_model:
     parameters:
       beta:
         values: [0.97, 0.975, 0.98]
+
+  # Sweep over shock parameters (example)
+  # shock:
+  #   parameters:
+  #     rho_v:
+  #       values: [0.90, 0.95, 0.98]

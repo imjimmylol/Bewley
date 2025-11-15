@@ -5,12 +5,13 @@ exp_name: "bewley_default_run"
 
 training:
   agents: 87
-  learning_rate: 1e-3
-  training_steps: 1000
+  learning_rate: 1e-4
+  training_steps: 100
   batch_size: 256
-  display_step: 100
-  train_step_interval: 2
-
+  display_step: 50
+  train_step_interval: 4
+  save_interval: 25
+  
 bewley_model:
   theta: 1.0         # CRRA
   beta: 0.975        # Discount factor

@@ -1,16 +1,16 @@
 # config/default.yaml
 
 # Experiment name, used for checkpointing if wandb is not used
-exp_name: "bewley_default_run"
+exp_name: "Tax_Exp_BaselineRun"
 
 training:
   agents: 87
   learning_rate: 1e-4
-  training_steps: 10000
+  training_steps: 100
   batch_size: 256
-  display_step: 500
+  display_step: 50
   train_step_interval: 4
-  save_interval: 2500
+  save_interval: 25
 
 bewley_model:
   theta: 1.0         # CRRA
@@ -22,9 +22,9 @@ bewley_model:
   delta: 0.06        # Depreciation rate of capital
 
 tax_params:
-  tax_consumption: 0.065
-  tax_income: 0.2
-  tax_saving: 0.1
+  tax_consumption: 0
+  tax_income: 0
+  tax_saving: 0
   income_tax_elasticity: 0.5
   saving_tax_elasticity: 0.5
 

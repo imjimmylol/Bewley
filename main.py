@@ -29,9 +29,21 @@ def main():
 
     # 3. Initialize wandb
     # - `project`: Name of the project in wandb.
+    # - `name`: Use exp_name from config if provided, BUT NOT in sweep mode
+    #           (sweeps need unique auto-generated names for each run)
     # - `config`: The base config dictionary. Wandb will override this with
     #             parameters from a sweep agent if one is running.
-    run = wandb.init(project="Bewley-Project-Example", config=base_config)
+
+    # Check if we're in sweep mode by looking for WANDB_SWEEP_ID env variable
+    is_sweep = os.environ.get('WANDB_SWEEP_ID') is not None
+
+    if is_sweep:
+        # In sweep mode: let wandb auto-generate unique names
+        run = wandb.init(project="Bewley-Project-Example", config=base_config)
+    else:
+        # Normal mode: use exp_name from config if provided
+        run_name = base_config.get('exp_name', None)
+        run = wandb.init(project="Bewley-Project-Example", name=run_name, config=base_config)
     
     # 4. Get the final configuration from wandb
     # `wandb.config` is a special object that holds the definitive parameters for this run,

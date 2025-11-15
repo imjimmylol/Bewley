@@ -243,6 +243,12 @@ def train(config, run):
             budget_diff_val = money_disposable_t_mean_val - sav_plus_cons_val
             budget_ratio_val = sav_plus_cons_val / money_disposable_t_mean_val if abs(money_disposable_t_mean_val) > 1e-8 else 0.0
 
+            # Agent actions for wandb histograms (extract before deletion)
+            mu_t_numpy = mu_t.detach().cpu().numpy().flatten()
+            savings_ratio_t_numpy = savings_ratio_t.detach().cpu().numpy().flatten()
+            mu_t_mean_val = mu_t.mean().item()
+            savings_ratio_t_mean_val = savings_ratio_t.mean().item()
+
         # CRITICAL: Clear temporary variables to prevent memory leaks
         # Delete tensors that have computational graphs attached
         del temp_state, parallel_A, parallel_B, outcomes_A, outcomes_B
@@ -258,6 +264,9 @@ def train(config, run):
         if step % config.training.display_step == 0 or step == 1:
             print(f"\nStep {step}/{config.training.training_steps}")
             print(f"  Loss: {loss_total_val:.4f} (fb={loss_fb_val:.4f}, euler={loss_aux_mu_val:.4f}, labor={loss_labor_val:.4f})")
+            print(f"  Agent Actions:")
+            print(f"    - Mean mu (consumption/money): {mu_t_mean_val:.3f}")
+            print(f"    - Mean savings ratio: {savings_ratio_t_mean_val:.3f}")
             print(f"  State Statistics:")
             print(f"    - Mean consumption: {consumption_mean_val:.3f}")
             print(f"    - Mean labor: {labor_mean_val:.3f}")
@@ -295,6 +304,11 @@ def train(config, run):
                 "state/budget_ratio": budget_ratio_val,
                 "market/wage": wage_mean_val,
                 "market/return": ret_mean_val,
+                # Agent actions
+                "actions/mu_mean": mu_t_mean_val,
+                "actions/savings_ratio_mean": savings_ratio_t_mean_val,
+                "actions/mu_distribution": wandb.Histogram(mu_t_numpy),
+                "actions/savings_ratio_distribution": wandb.Histogram(savings_ratio_t_numpy),
                 # Normalized network inputs (for debugging)
                 "debug/normalized_money_mean": normalized_money_mean,
                 "debug/normalized_ability_mean": normalized_ability_mean,
@@ -308,13 +322,13 @@ def train(config, run):
             })
 
         # --- 5. Save checkpoints periodically (Example) ---
-        # if step % config.training.save_interval == 0:
-        #     print(f"Saving checkpoint at step {step}...")
-        #     torch.save(policy_net.state_dict(), os.path.join(weights_dir, f"model_step_{step}.pt"))
-        #     torch.save(main_state, os.path.join(states_dir, f"state_step_{step}.pt"))
-        #     normalizer.save(os.path.join(normalizer_dir, f"norm_step_{step}.pt"))
+        if step % config.training.save_interval == 0:
+            print(f"Saving checkpoint at step {step}...")
+            torch.save(policy_net.state_dict(), os.path.join(weights_dir, f"model_step_{step}.pt"))
+            torch.save(main_state, os.path.join(states_dir, f"state_step_{step}.pt"))
+            normalizer.save(os.path.join(normalizer_dir, f"norm_step_{step}.pt"))
 
     print("\nTraining loop finished.")
     # --- 6. Final save (Example) ---
-    # print("Saving final model...")
-    # torch.save(policy_net.state_dict(), os.path.join(weights_dir, "model_final.pt"))
+    print("Saving final model...")
+    torch.save(policy_net.state_dict(), os.path.join(weights_dir, "model_final.pt"))
