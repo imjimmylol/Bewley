@@ -177,3 +177,72 @@ Navigate to the W&B sweep URL (printed in Step 2) to view:
 
 During sweeps, the `exp_name` from config files is automatically ignored to prevent checkpoint conflicts. Each sweep run gets its own unique checkpoint directory based on the auto-generated run name.
 
+## Visualizing Decision Rules
+
+After training, you can visualize the learned decision rules (policy functions) from saved checkpoints. The `vis_dc_rle.py` script allows you to see how agent decisions (consumption, labor, savings) vary with different state variables.
+
+### Basic Usage
+
+```bash
+python vis_dc_rle.py --checkpoint_dir checkpoints/bewley_default_run --step 2500
+```
+
+**Arguments:**
+- `--checkpoint_dir`: Path to the checkpoint directory (e.g., `checkpoints/Tax_Exp_BaselineRun`)
+- `--step`: Training step to load (e.g., `2500`)
+- `--config`: (Optional) Path to config file (default: `config/baseline.yaml`)
+
+### What the Script Does
+
+The visualization script:
+
+1. **Loads a checkpoint**: Loads the trained policy network, normalizer, and environment state from the specified checkpoint
+2. **Creates a grid of states**: Varies one agent's characteristic (e.g., wealth from 0.1 to 10.0) while keeping everything else fixed
+3. **Evaluates the policy**: Runs the policy network on each grid point to get decisions
+4. **Plots decision rules**: Creates a 2x2 subplot showing:
+   - Consumption policy
+   - Labor supply policy
+   - Savings policy
+   - Savings ratio policy
+
+### Output
+
+The script generates:
+- Console output showing policy evaluation results
+- A plot saved as `decision_rules_agent{X}_batch{Y}.png`
+
+**Example output:**
+```
+decision_rules_agent0_batch0.png
+```
+
+This plot shows how Agent 0 in World 0 makes decisions as their wealth (money_disposable) varies.
+
+### Customization
+
+The default behavior varies `money_disposable` for Agent 0 in Batch 0. You can customize this by modifying the `make_decision_rules_inputs()` call in `vis_dc_rle.py`:
+
+```python
+grid_result = make_decision_rules_inputs(
+    state=initial_state,
+    batch_idx=0,              # Which world to analyze
+    agent_idx=0,              # Which agent to analyze
+    vary_var="money_disposable",  # Variable to vary
+    vary_range=(0.1, 10.0),   # Range to sweep
+    n_points=50               # Number of grid points
+)
+```
+
+**Variables you can vary:**
+- `"money_disposable"` - Current wealth
+- `"ability"` - Current productivity
+- `"savings"` - Previous period savings
+
+### Understanding the Plots
+
+The decision rule plots help you understand:
+- **Consumption smoothing**: How agents adjust consumption in response to wealth changes
+- **Labor-leisure tradeoff**: How labor supply responds to productivity/wealth
+- **Precautionary savings**: How agents save for future uncertainty
+- **Policy heterogeneity**: Whether different agents have learned different strategies
+
