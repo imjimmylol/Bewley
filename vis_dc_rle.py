@@ -498,11 +498,16 @@ def main():
     parser.add_argument("--checkpoint_dir", type=str, required=True,
                        help="Path to checkpoint directory (e.g., checkpoints/run_name)")
     parser.add_argument("--step", type=int, required=True,
-                       help="Training step to load")
+                       help="Training step to load model weights from")
+    parser.add_argument("--state_step", type=int, default=None,
+                       help="Training step to load state from (default: same as --step)")
     parser.add_argument("--config", type=str, default="config/baseline.yaml",
                        help="Path to config file")
 
     args = parser.parse_args()
+
+    # If state_step not specified, use the same as model step
+    state_step = args.state_step if args.state_step is not None else args.step
 
     # Load config
     if not os.path.exists(args.config):
@@ -523,18 +528,37 @@ def main():
     print(f"DECISION RULE VISUALIZATION")
     print(f"{'='*60}")
     print(f"Checkpoint dir: {args.checkpoint_dir}")
-    print(f"Step:           {args.step}")
+    print(f"Model step:     {args.step}")
+    print(f"State step:     {state_step}")
     print(f"Config:         {args.config}")
     print(f"Device:         {device}")
     print(f"{'='*60}\n")
 
-    # Load checkpoint
-    policy_net, normalizer, state = load_checkpoint(
+    # Load model weights and normalizer from specified step
+    policy_net, normalizer, _ = load_checkpoint(
         checkpoint_dir=args.checkpoint_dir,
         step=args.step,
         config=config,
         device=device
     )
+
+    # Load state from potentially different step
+    if state_step != args.step:
+        print(f"Loading state from different step: {state_step}")
+        _, _, state = load_checkpoint(
+            checkpoint_dir=args.checkpoint_dir,
+            step=state_step,
+            config=config,
+            device=device
+        )
+    else:
+        # State already loaded with the model
+        _, _, state = load_checkpoint(
+            checkpoint_dir=args.checkpoint_dir,
+            step=args.step,
+            config=config,
+            device=device
+        )
 
     # Initialize environment
     env = EconomyEnv(config, normalizer, device=device)
@@ -559,7 +583,7 @@ def main():
         batch_idx=0,
         agent_idx=0,
         vary_var="money_disposable",
-        vary_range=(0.1, 5),
+        vary_range=(0.1, 10),
         n_points=50
     )
 

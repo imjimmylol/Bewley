@@ -189,8 +189,14 @@ python vis_dc_rle.py --checkpoint_dir checkpoints/bewley_default_run --step 2500
 
 **Arguments:**
 - `--checkpoint_dir`: Path to the checkpoint directory (e.g., `checkpoints/Tax_Exp_BaselineRun`)
-- `--step`: Training step to load (e.g., `2500`)
+- `--step`: Training step to load model weights from (e.g., `2500`)
+- `--state_step`: (Optional) Training step to load state from (default: same as `--step`)
 - `--config`: (Optional) Path to config file (default: `config/baseline.yaml`)
+
+```bash
+# Different step for env and weights
+python vis_dc_rle.py --checkpoint_dir checkpoints/bewley_default_run --step 10000 --state_step 2500
+```
 
 ### What the Script Does
 
