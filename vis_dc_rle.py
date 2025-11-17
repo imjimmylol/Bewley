@@ -582,8 +582,8 @@ def main():
         state=initial_state,
         batch_idx=0,
         agent_idx=0,
-        vary_var="money_disposable",
-        vary_range=(0.1, 10),
+        vary_var="ability",
+        vary_range=(0, 5),
         n_points=50
     )
 
