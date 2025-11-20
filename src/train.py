@@ -130,6 +130,11 @@ def train(config, run):
     # Initialize loss
     loss_calculator = LossCalculator(config=config, device=device)
 
+    # --- EXPERIMENT 2: Track ability-money correlation ---
+    # Store previous step's data for lagged correlation analysis
+    prev_ability = None
+    prev_money = None
+
     # --- 4. Training Loop ---
     print("Starting training loop with environment stepping...")
     total_steps = config.training.training_steps
@@ -218,6 +223,11 @@ def train(config, run):
         # ==== LOGGING ====
         # Extract scalar values BEFORE deleting tensors
         if step % config.training.display_step == 0 or step == 1 or wandb.run:
+            # ==== EXPERIMENT 2: Extract state for correlation analysis ====
+            # Extract current state data (only during logging to avoid overhead)
+            current_ability = main_state.ability.detach().cpu().numpy().flatten()
+            current_money = main_state.moneydisposable.detach().cpu().numpy().flatten()
+            current_labor = labor_t.detach().cpu().numpy().flatten()  # From temporary state
             # Convert to Python scalars to avoid holding tensor references
             loss_total_val = loss["total"].item()
             loss_fb_val = loss["fb"].item()
@@ -235,6 +245,61 @@ def train(config, run):
             ability_raw_mean = main_state.ability.mean().item()
             money_raw_std = main_state.moneydisposable.std().item()
             ability_raw_std = main_state.ability.std().item()
+
+            # Extract normalizer statistics for comparison
+            if "moneydisposalbe" in normalizer._stats:  # Note: typo in key from environment.py
+                money_norm_stats = normalizer._stats["moneydisposalbe"]
+                money_norm_mean = money_norm_stats.mean.mean().item()
+                money_norm_std = torch.sqrt(
+                    money_norm_stats.M2 / torch.clamp(money_norm_stats.count - 1, min=1.0)
+                ).mean().item()
+                money_norm_count = money_norm_stats.count.mean().item()
+            else:
+                money_norm_mean = 0.0
+                money_norm_std = 1.0
+                money_norm_count = 0.0
+
+            if "ability" in normalizer._stats:
+                ability_norm_stats = normalizer._stats["ability"]
+                ability_norm_mean = ability_norm_stats.mean.mean().item()
+                ability_norm_std = torch.sqrt(
+                    ability_norm_stats.M2 / torch.clamp(ability_norm_stats.count - 1, min=1.0)
+                ).mean().item()
+                ability_norm_count = ability_norm_stats.count.mean().item()
+            else:
+                ability_norm_mean = 0.0
+                ability_norm_std = 1.0
+                ability_norm_count = 0.0
+
+            # Compute discrepancy between normalizer and reality
+            money_mean_discrepancy = money_raw_mean - money_norm_mean
+            money_std_discrepancy = money_raw_std - money_norm_std
+            ability_mean_discrepancy = ability_raw_mean - ability_norm_mean
+            ability_std_discrepancy = ability_raw_std - ability_norm_std
+
+            # ==== EXPERIMENT 2: Ability-Money Correlation Analysis ====
+            # Compute correlation: ability[t] vs money[t] (contemporaneous)
+            corr_ability_money_current = np.corrcoef(current_ability, current_money)[0, 1]
+            # Compute correlation: ability[t] vs labor[t] (contemporaneous)
+            corr_ability_labor_current = np.corrcoef(current_ability, current_labor)[0, 1]
+
+            # Compute lagged correlation: ability[t-1] vs money[t]
+            # This captures: "high ability yesterday → high income yesterday → high money today"
+            if prev_ability is not None and prev_money is not None:
+                corr_ability_money_lagged = np.corrcoef(prev_ability, current_money)[0, 1]
+                # Also check: ability[t] vs money[t-1] (reverse lag)
+                corr_ability_current_money_lagged = np.corrcoef(current_ability, prev_money)[0, 1]
+            else:
+                corr_ability_money_lagged = 0.0
+                corr_ability_current_money_lagged = 0.0
+
+            # Prepare scatter plot data for wandb (subsample for visualization)
+            # Sample 500 points to avoid overwhelming wandb
+            n_samples = min(500, len(current_ability))
+            sample_indices = np.random.choice(len(current_ability), n_samples, replace=False)
+            ability_sample = current_ability[sample_indices]
+            money_sample = current_money[sample_indices]
+            labor_sample = current_labor[sample_indices]
 
             # VERIFY BUDGET CONSTRAINT: consumption[t] + savings[t+1] = money_disposable[t]
             money_disposable_t_mean_val = money_disposable_t.mean().item()
@@ -279,6 +344,18 @@ def train(config, run):
             print(f"    - Normalized ability: mean={normalized_ability_mean:.3f}, std={normalized_ability_std:.3f}")
             print(f"    - Raw money: mean={money_raw_mean:.3f}, std={money_raw_std:.3f}")
             print(f"    - Raw ability: mean={ability_raw_mean:.3f}, std={ability_raw_std:.3f}")
+            print(f"  Normalizer Health Check:")
+            print(f"    - Money: normalizer_mean={money_norm_mean:.3f}, actual_mean={money_raw_mean:.3f}, discrepancy={money_mean_discrepancy:.3f}")
+            print(f"    - Money: normalizer_std={money_norm_std:.3f}, actual_std={money_raw_std:.3f}, discrepancy={money_std_discrepancy:.3f}")
+            print(f"    - Ability: normalizer_mean={ability_norm_mean:.3f}, actual_mean={ability_raw_mean:.3f}, discrepancy={ability_mean_discrepancy:.3f}")
+            print(f"    - Ability: normalizer_std={ability_norm_std:.3f}, actual_std={ability_raw_std:.3f}, discrepancy={ability_std_discrepancy:.3f}")
+            print(f"    - Normalizer update count: money={money_norm_count:.0f}, ability={ability_norm_count:.0f}")
+            print(f"  Experiment 2: Ability-Money & Ability-Labor Correlation:")
+            print(f"    - Corr(ability[t], money[t]): {corr_ability_money_current:.4f}")
+            print(f"    - Corr(ability[t], labor[t]): {corr_ability_labor_current:.4f}")
+            if prev_ability is not None:
+                print(f"    - Corr(ability[t-1], money[t]): {corr_ability_money_lagged:.4f}")
+                print(f"    - Corr(ability[t], money[t-1]): {corr_ability_current_money_lagged:.4f}")
             print(f"  Budget Constraint Verification:")
             print(f"    - Money disposable[t]: {money_disposable_t_mean_val:.3f}")
             print(f"    - Consumption[t]: {consumption_mean_val:.3f}")
@@ -318,8 +395,54 @@ def train(config, run):
                 "debug/raw_ability_mean": ability_raw_mean,
                 "debug/raw_money_std": money_raw_std,
                 "debug/raw_ability_std": ability_raw_std,
+                # Normalizer statistics
+                "normalizer/money_mean": money_norm_mean,
+                "normalizer/money_std": money_norm_std,
+                "normalizer/money_count": money_norm_count,
+                "normalizer/ability_mean": ability_norm_mean,
+                "normalizer/ability_std": ability_norm_std,
+                "normalizer/ability_count": ability_norm_count,
+                # Discrepancy metrics (RED FLAG if these are large!)
+                "normalizer/money_mean_discrepancy": money_mean_discrepancy,
+                "normalizer/money_std_discrepancy": money_std_discrepancy,
+                "normalizer/ability_mean_discrepancy": ability_mean_discrepancy,
+                "normalizer/ability_std_discrepancy": ability_std_discrepancy,
+                # Relative discrepancy (percentage)
+                "normalizer/money_mean_drift_percent": abs(money_mean_discrepancy) / max(abs(money_norm_mean), 1e-6) * 100,
+                "normalizer/ability_mean_drift_percent": abs(ability_mean_discrepancy) / max(abs(ability_norm_mean), 1e-6) * 100,
+                # Experiment 2: Ability-Money & Ability-Labor Correlation
+                "experiment2/corr_ability_money_current": corr_ability_money_current,
+                "experiment2/corr_ability_money_lagged": corr_ability_money_lagged,
+                "experiment2/corr_ability_current_money_lagged": corr_ability_current_money_lagged,
+                "experiment2/corr_ability_labor_current": corr_ability_labor_current,
                 "step": step
             })
+
+            # Scatter plots: Create less frequently to avoid overhead (every save_interval steps)
+            if step % config.training.save_interval == 0 or step == 1:
+                wandb.log({
+                    "experiment2/ability_vs_money_scatter": wandb.plot.scatter(
+                        wandb.Table(
+                            data=[[a, m] for a, m in zip(ability_sample, money_sample)],
+                            columns=["ability[t]", "money[t]"]
+                        ),
+                        "ability[t]", "money[t]",
+                        title=f"Ability vs Money (Step {step})"
+                    ),
+                    "experiment2/ability_vs_labor_scatter": wandb.plot.scatter(
+                        wandb.Table(
+                            data=[[a, l] for a, l in zip(ability_sample, labor_sample)],
+                            columns=["ability[t]", "labor[t]"]
+                        ),
+                        "ability[t]", "labor[t]",
+                        title=f"Ability vs Labor (Step {step})"
+                    ),
+                    "step": step
+                })
+
+            # Store current state for next iteration's lagged correlation
+            prev_ability = current_ability.copy()
+            prev_money = current_money.copy()
 
         # --- 5. Save checkpoints periodically (Example) ---
         if step % config.training.save_interval == 0:
