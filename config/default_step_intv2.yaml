@@ -29,9 +29,15 @@ tax_params:
   saving_tax_elasticity: 0.5
 
 
+initial_state:
+  moneydisposable_mean: 2.0    # Mean for lognormal initialization
+  moneydisposable_std: 0.5     # Std for lognormal initialization
+  assets_mean: 1.0             # Mean for savings lognormal initialization
+  assets_std: 0.5              # Std for savings lognormal initialization
+
 shock:
   rho_v: 0.95        # persistence of ability shock
   sigma_v: 0.2       # std of ability shock
-  v_bar: 5
+  v_bar: 5           # mean ability (used for stationary distribution)
   p: 2.2e-6
   q: 0.99

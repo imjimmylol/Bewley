@@ -6,12 +6,12 @@ exp_name: "bewley_default_run"
 training:
   agents: 87
   learning_rate: 1e-4
-  training_steps: 100
+  training_steps: 10000
   batch_size: 256
-  display_step: 50
+  display_step: 1000
   train_step_interval: 4
-  save_interval: 25
-
+  save_interval: 250
+  
 bewley_model:
   theta: 1.0         # CRRA
   beta: 0.975        # Discount factor
@@ -29,9 +29,15 @@ tax_params:
   saving_tax_elasticity: 0
 
 
+initial_state:
+  moneydisposable_mean: 2.0    # Mean for lognormal initialization
+  moneydisposable_std: 0.5     # Std for lognormal initialization
+  assets_mean: 1.0             # Mean for savings lognormal initialization
+  assets_std: 0.5              # Std for savings lognormal initialization
+
 shock:
   rho_v: 0.95        # persistence of ability shock
   sigma_v: 0.2       # std of ability shock
-  v_bar: 5
+  v_bar: 5           # mean ability (used for stationary distribution)
   p: 2.2e-6
   q: 0.99

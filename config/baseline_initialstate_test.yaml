@@ -1,15 +1,15 @@
 # config/default.yaml
 
 # Experiment name, used for checkpointing if wandb is not used
-exp_name: "bewley_default_run"
+exp_name: "Test_InitialState_BaselineRun"
 
 training:
   agents: 87
   learning_rate: 1e-4
-  training_steps: 15000
+  training_steps: 10000
   batch_size: 256
   display_step: 1000
-  train_step_interval: 4
+  train_step_interval: 2
   save_interval: 2500
 
 bewley_model:
@@ -21,12 +21,6 @@ bewley_model:
   r: 0.04            # Interest rate (return to savings)
   delta: 0.06        # Depreciation rate of capital
 
-initial_state:
-  moneydisposable_mean: 2.0
-  moneydisposable_std: 0.5
-  assets_mean: 1.0
-  assets_std: 0.5
-
 tax_params:
   tax_consumption: 0.065
   tax_income: 0.2
@@ -35,9 +29,15 @@ tax_params:
   saving_tax_elasticity: 0.5
 
 
+initial_state:
+  moneydisposable_mean: -0.35   # Mean for lognormal initialization
+  moneydisposable_std: 0.84     # Std for lognormal initialization
+  assets_mean: 1.0             # Mean for savings lognormal initialization
+  assets_std: 0.5              # Std for savings lognormal initialization
+
 shock:
   rho_v: 0.95        # persistence of ability shock
   sigma_v: 0.2       # std of ability shock
-  v_bar: 5
+  v_bar: 5           # mean ability (used for stationary distribution)
   p: 2.2e-6
   q: 0.99

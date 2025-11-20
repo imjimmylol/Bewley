@@ -42,8 +42,8 @@ def initialize_env_state(config, device="cpu"):
     tax_params = torch.tensor(list(tax_params_values.values()), dtype=torch.float32, device=device)
     tax_params = tax_params.repeat(batch_size, 1)
 
-    moneydisposable=np.random.lognormal(0.1, 2.0, batch_size * n_agents).reshape(batch_size, n_agents)
-    savings= np.random.lognormal(0.1, 2.0, batch_size * n_agents).reshape(batch_size, n_agents)
+    moneydisposable=np.random.lognormal(np.log(config.initial_state.moneydisposable_mean), config.initial_state.moneydisposable_std, batch_size * n_agents).reshape(batch_size, n_agents)
+    savings= np.random.lognormal(np.log(config.initial_state.assets_mean), config.initial_state.assets_std, batch_size * n_agents).reshape(batch_size, n_agents)
 
     # Initialize ability from stationary distribution of AR(1) process
     # AR(1): log(v[t+1]) = (1-rho)*log(v_bar) + rho*log(v[t]) + eps

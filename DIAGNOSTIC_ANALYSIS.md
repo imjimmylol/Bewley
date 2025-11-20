@@ -607,3 +607,8 @@ Results: Statistics consistent with the state, rule out assumption of the adapti
 Results: Correlation between ability and wealth increase by time implies Agents are learning to accumulate wealth based on ability. Indicating the possibility of low exploration in early environment
 
 ![alt text](./img/image.png)
+
+### 3. wrong env state
+Results: The labor still increases with the ability, after visulizing the transition. 
+
+![alt text](./img/exp3.png)
