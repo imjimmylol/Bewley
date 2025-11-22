@@ -14,7 +14,7 @@ venv/
 wandb/
 
 # Checkpoints & Logs
-# checkpoints/    
+checkpoints/    
 logs/
 *.log
 
