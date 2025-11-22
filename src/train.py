@@ -149,7 +149,7 @@ def train(config, run):
         main_state, temp_state, (parallel_A, outcomes_A), (parallel_B, outcomes_B) = env.step(
             main_state=main_state,
             policy_net=policy_net,
-            deterministic=False,
+            deterministic= not config.bewley_model.incomplete, # If incomplete markets, use stochastic policies
             update_normalizer=True,
             commit_strategy="random"
         )

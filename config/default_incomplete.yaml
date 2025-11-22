@@ -1,16 +1,16 @@
 # config/default.yaml
 
 # Experiment name, used for checkpointing if wandb is not used
-exp_name: "Tax_Exp_BaselineRun"
+exp_name: "bewley_default_run_incomplete"
 
 training:
-  agents: 87
+  agents: 800
   learning_rate: 1e-4
-  training_steps: 100
+  training_steps: 10000
   batch_size: 256
-  display_step: 50
+  display_step: 1000
   train_step_interval: 4
-  save_interval: 25
+  save_interval: 1000
 
 bewley_model:
   theta: 1.0         # CRRA
@@ -20,6 +20,14 @@ bewley_model:
   gamma: 2.0         # Inverse Frisch elasticity
   r: 0.04            # Interest rate (return to savings)
   delta: 0.06        # Depreciation rate of capital
+  incomplete: true   # Incomplete markets flag
+
+
+initial_state:
+  moneydisposable_mean: 2.0
+  moneydisposable_std: 0.5
+  assets_mean: 1.0
+  assets_std: 0.5
 
 tax_params:
   tax_consumption: 0.065
@@ -29,15 +37,9 @@ tax_params:
   saving_tax_elasticity: 0.5
 
 
-initial_state:
-  moneydisposable_mean: 2.0    # Mean for lognormal initialization
-  moneydisposable_std: 0.5     # Std for lognormal initialization
-  assets_mean: 1.0             # Mean for savings lognormal initialization
-  assets_std: 0.5              # Std for savings lognormal initialization
-
 shock:
-  rho_v: 0.95        # persistence of ability shock
-  sigma_v: 0.2       # std of ability shock
-  v_bar: 5           # mean ability (used for stationary distribution)
+  rho_v: 0.98        # persistence of ability shock
+  sigma_v: 0.36      # std of ability shock (increased for [0, 10] range)
+  v_bar: 5
   p: 2.2e-6
   q: 0.99

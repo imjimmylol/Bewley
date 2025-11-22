@@ -575,6 +575,11 @@ def main():
         config_dict = yaml.safe_load(f)
     config = dict_to_namespace(config_dict)
 
+    # Create results directory based on exp_name
+    exp_name = config_dict.get('exp_name', 'default_experiment')
+    results_dir = os.path.join("results", exp_name)
+    os.makedirs(results_dir, exist_ok=True)
+
     # Determine device
     device = (
         torch.device("cuda") if torch.cuda.is_available()
@@ -590,6 +595,7 @@ def main():
     print(f"State step: {state_step}")
     print(f"Transitions: {args.n_transitions}")
     print(f"Device: {device}")
+    print(f"Results directory: {results_dir}")
     print(f"{'='*60}\n")
 
     # Load checkpoint
@@ -624,7 +630,7 @@ def main():
 
     plot_state_distributions(
         state=state,
-        save_path="exp3_initial_state_distributions.png"
+        save_path=os.path.join(results_dir, "exp3_initial_state_distributions.png")
     )
 
     # ========================================================================
@@ -682,7 +688,7 @@ def main():
     plot_decision_rules_scatter(
         data,
         batch_idx=args.batch_idx,
-        save_path=f"exp3_scatter_decision_rules_batch{args.batch_idx}.png"
+        save_path=os.path.join(results_dir, f"exp3_scatter_decision_rules_batch{args.batch_idx}.png")
     )
 
     # Binned plot (clearer trends)
@@ -690,7 +696,7 @@ def main():
         data,
         batch_idx=args.batch_idx,
         n_bins=args.n_bins,
-        save_path=f"exp3_binned_decision_rules_batch{args.batch_idx}.png"
+        save_path=os.path.join(results_dir, f"exp3_binned_decision_rules_batch{args.batch_idx}.png")
     )
 
     print("\n" + "="*60)
