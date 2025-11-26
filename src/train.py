@@ -13,7 +13,8 @@ from src.monitoring import TrainingMonitor
 from src.visualization import (
     prepare_data_for_plotting,
     plot_decision_rules_scatter,
-    plot_binned_decision_rules
+    plot_binned_decision_rules,
+    plot_state_distributions
 )
 import numpy as np
 
@@ -249,6 +250,14 @@ def train(config, run):
                 batch_idx=0,
                 n_bins=10,
                 save_path=os.path.join(base_checkpoint_dir, f"binned_rules_step_{step}.png"),
+                log_to_wandb=True,
+                step=step
+            )
+
+            # Generate state distribution plot with W&B logging
+            plot_state_distributions(
+                main_state,
+                save_path=os.path.join(base_checkpoint_dir, f"state_distributions_step_{step}.png"),
                 log_to_wandb=True,
                 step=step
             )
