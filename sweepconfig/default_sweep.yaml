@@ -23,7 +23,7 @@ command:
   - python
   - ${program}
   - "--configs"
-  - "config/baseline.yaml"  # Base config file
+  - "config/default.yaml"  # Base config file
 
 parameters:
   # Sweep over training hyperparameters
