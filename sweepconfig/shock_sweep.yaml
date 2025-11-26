@@ -26,13 +26,6 @@ command:
   - "config/baseline.yaml"  # Base config file
 
 parameters:
-  # Sweep over training hyperparameters
-  training:
-    parameters:
-      learning_rate:
-        values: [1e-3, 5e-4, 1e-4]
-      batch_size:
-        values: [128, 256]
 
   # Sweep over shock parameters (example)
   shock:
