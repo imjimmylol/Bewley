@@ -90,7 +90,7 @@ def compute_statistics(data):
     return stats_dict
 
 
-def plot_decision_rules_scatter(data, batch_idx=0, save_path="decision_rules.png",
+def plot_decision_rules_scatter(data, batch_idx=None, save_path="decision_rules.png",
                                  log_to_wandb=False, step=None):
     """
     Plot decision rules as scatter plots of actual agent decisions.
@@ -99,7 +99,7 @@ def plot_decision_rules_scatter(data, batch_idx=0, save_path="decision_rules.png
 
     Args:
         data: Dictionary with shape (n_transitions, batch_size, n_agents)
-        batch_idx: Which batch to visualize (default: 0)
+        batch_idx: Which batch to visualize. If None, uses all batches (default: None)
         save_path: Where to save the plot
         log_to_wandb: If True, log image to wandb
         step: Training step (for W&B logging)
@@ -107,14 +107,25 @@ def plot_decision_rules_scatter(data, batch_idx=0, save_path="decision_rules.png
     Returns:
         dict: Statistics dictionary
     """
-    # Extract data from specified batch
-    # Shape: (n_transitions, n_agents) after indexing batch_idx
-    ability = data['ability'][:, batch_idx, :].flatten()
-    money = data['money_disposable'][:, batch_idx, :].flatten()
-    consumption = data['consumption'][:, batch_idx, :].flatten()
-    labor = data['labor'][:, batch_idx, :].flatten()
-    savings = data['savings'][:, batch_idx, :].flatten()
-    savings_ratio = data['savings_ratio'][:, batch_idx, :].flatten()
+    # Extract data - flatten across all dimensions to get full distribution
+    if batch_idx is None:
+        # Use ALL batches - flatten across (n_transitions, batch_size, n_agents)
+        ability = data['ability'].flatten()
+        money = data['money_disposable'].flatten()
+        consumption = data['consumption'].flatten()
+        labor = data['labor'].flatten()
+        savings = data['savings'].flatten()
+        savings_ratio = data['savings_ratio'].flatten()
+        batch_label = "All Batches"
+    else:
+        # Use only specified batch
+        ability = data['ability'][:, batch_idx, :].flatten()
+        money = data['money_disposable'][:, batch_idx, :].flatten()
+        consumption = data['consumption'][:, batch_idx, :].flatten()
+        labor = data['labor'][:, batch_idx, :].flatten()
+        savings = data['savings'][:, batch_idx, :].flatten()
+        savings_ratio = data['savings_ratio'][:, batch_idx, :].flatten()
+        batch_label = f"Batch {batch_idx}"
 
     # Create a flat version for compute_statistics
     flat_data = {
@@ -219,7 +230,7 @@ def plot_decision_rules_scatter(data, batch_idx=0, save_path="decision_rules.png
     axes[1, 2].legend(fontsize=9)
     axes[1, 2].grid(True, alpha=0.3)
 
-    fig.suptitle(f"Decision Rules: Actual Agent Decisions (Batch {batch_idx}, {n_agents} agents × {n_transitions} steps = {n_points} points)",
+    fig.suptitle(f"Decision Rules: Actual Agent Decisions ({batch_label}, {n_points} points)",
                  fontsize=14, fontweight='bold')
 
     plt.tight_layout(rect=[0, 0, 1, 0.96])
@@ -241,7 +252,7 @@ def plot_decision_rules_scatter(data, batch_idx=0, save_path="decision_rules.png
     return stats_dict
 
 
-def plot_binned_decision_rules(data, batch_idx=0, n_bins=10,
+def plot_binned_decision_rules(data, batch_idx=None, n_bins=10,
                                 save_path="binned_rules.png",
                                 log_to_wandb=False, step=None):
     """
@@ -251,19 +262,31 @@ def plot_binned_decision_rules(data, batch_idx=0, n_bins=10,
 
     Args:
         data: Dictionary with shape (n_transitions, batch_size, n_agents)
-        batch_idx: Which batch to visualize (default: 0)
+        batch_idx: Which batch to visualize. If None, uses all batches (default: None)
         n_bins: Number of bins for grouping
         save_path: Where to save the plot
         log_to_wandb: If True, log image to wandb
         step: Training step (for W&B logging)
     """
-    # Extract data from specified batch and flatten
-    ability = data['ability'][:, batch_idx, :].flatten()
-    money = data['money_disposable'][:, batch_idx, :].flatten()
-    consumption = data['consumption'][:, batch_idx, :].flatten()
-    labor = data['labor'][:, batch_idx, :].flatten()
-    savings = data['savings'][:, batch_idx, :].flatten()
-    savings_ratio = data['savings_ratio'][:, batch_idx, :].flatten()
+    # Extract data - flatten to get full distribution
+    if batch_idx is None:
+        # Use ALL batches
+        ability = data['ability'].flatten()
+        money = data['money_disposable'].flatten()
+        consumption = data['consumption'].flatten()
+        labor = data['labor'].flatten()
+        savings = data['savings'].flatten()
+        savings_ratio = data['savings_ratio'].flatten()
+        batch_label = "All Batches"
+    else:
+        # Use only specified batch
+        ability = data['ability'][:, batch_idx, :].flatten()
+        money = data['money_disposable'][:, batch_idx, :].flatten()
+        consumption = data['consumption'][:, batch_idx, :].flatten()
+        labor = data['labor'][:, batch_idx, :].flatten()
+        savings = data['savings'][:, batch_idx, :].flatten()
+        savings_ratio = data['savings_ratio'][:, batch_idx, :].flatten()
+        batch_label = f"Batch {batch_idx}"
 
     # Create flat data dict for compute_statistics
     flat_data = {
@@ -343,7 +366,7 @@ def plot_binned_decision_rules(data, batch_idx=0, n_bins=10,
     summary_text = (
         f"Binned Decision Rules Summary\n"
         f"{'='*35}\n\n"
-        f"Batch: {batch_idx}\n"
+        f"Data: {batch_label}\n"
         f"Number of bins: {n_bins}\n"
         f"Total data points: {len(ability)}\n\n"
         f"Correlations:\n"
@@ -360,10 +383,7 @@ def plot_binned_decision_rules(data, batch_idx=0, n_bins=10,
                     verticalalignment='center', fontfamily='monospace',
                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-    n_agents = data['ability'].shape[2]
-    n_transitions = data['ability'].shape[0]
-
-    fig.suptitle(f"Binned Decision Rules (Batch {batch_idx}: {n_agents} agents × {n_transitions} steps)",
+    fig.suptitle(f"Binned Decision Rules ({batch_label}: {len(ability)} data points)",
                  fontsize=14, fontweight='bold')
 
     plt.tight_layout(rect=[0, 0, 1, 0.96])

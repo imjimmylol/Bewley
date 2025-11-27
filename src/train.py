@@ -235,19 +235,17 @@ def train(config, run):
             # Prepare data for plotting (converts current step data to plotting format)
             plot_data = prepare_data_for_plotting(main_state, temp_state)
 
-            # Generate scatter plot with W&B logging
+            # Generate scatter plot with W&B logging (uses all batches by default)
             plot_decision_rules_scatter(
                 plot_data,
-                batch_idx=0,
                 save_path=os.path.join(base_checkpoint_dir, f"decision_rules_step_{step}.png"),
                 log_to_wandb=True,
                 step=step
             )
 
-            # Generate binned plot with W&B logging
+            # Generate binned plot with W&B logging (uses all batches by default)
             plot_binned_decision_rules(
                 plot_data,
-                batch_idx=0,
                 n_bins=10,
                 save_path=os.path.join(base_checkpoint_dir, f"binned_rules_step_{step}.png"),
                 log_to_wandb=True,
