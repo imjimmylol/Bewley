@@ -71,6 +71,7 @@ def transition_ability(
     p: float,
     q: float,
     superstar_multiplier: float = 10.0,
+    fix: bool = False,
     *,
     deterministic: bool = False
 ) -> Tuple[Tensor, Tensor]:
@@ -95,12 +96,17 @@ def transition_ability(
         p: Probability of becoming superstar
         q: Probability of remaining superstar
         superstar_multiplier: Multiplier for superstar ability (default: 10.0)
+        fix: If True, return ability unchanged (complete markets)
         deterministic: If True, no random shocks (for validation)
 
     Returns:
         ability_tp1: Next period ability (B, A)
         is_superstar_tp1: Next period superstar status (B, A) bool
     """
+    # If fix=True, complete markets: ability is fixed, no transitions
+    if fix:
+        return ability_t.detach(), is_superstar_t.detach()
+
     B, A = ability_t.shape
     device = ability_t.device
 
@@ -229,6 +235,12 @@ def transition_ability_with_history(
     # Optional: superstar multiplier (can be added to config)
     if hasattr(config.shock, 'superstar_multiplier'):
         shock_params['superstar_multiplier'] = config.shock.superstar_multiplier
+
+    # Extract fix parameter from bewley_model config
+    if hasattr(config.bewley_model, 'fix'):
+        shock_params['fix'] = config.bewley_model.fix
+    else:
+        shock_params['fix'] = False  # Default to False for backward compatibility
 
     # Transition ability
     ability_tp1, is_superstar_tp1 = transition_ability(
