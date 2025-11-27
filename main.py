@@ -21,6 +21,12 @@ def main():
         default=['config/default.yaml'],
         help='Paths to one or more config files. They are merged in the given order.'
     )
+    parser.add_argument(
+        '--project',
+        type=str,
+        default='Bewley-Project-Example',
+        help='Wandb project name (default: Bewley-Project-Example)'
+    )
     args, unknown = parser.parse_known_args()
 
     # 2. Load and merge configs from specified YAML files
@@ -39,11 +45,11 @@ def main():
 
     if is_sweep:
         # In sweep mode: let wandb auto-generate unique names
-        run = wandb.init(project="Bewley-Project-Example", config=base_config)
+        run = wandb.init(project=args.project, config=base_config)
     else:
         # Normal mode: use exp_name from config if provided
         run_name = base_config.get('exp_name', None)
-        run = wandb.init(project="Bewley-Project-Example", name=run_name, config=base_config)
+        run = wandb.init(project=args.project, name=run_name, config=base_config)
     
     # 4. Get the final configuration from wandb
     # `wandb.config` is a special object that holds the definitive parameters for this run,
