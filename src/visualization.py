@@ -140,6 +140,14 @@ def plot_decision_rules_scatter(data, batch_idx=None, save_path="decision_rules.
     # Compute statistics
     stats_dict = compute_statistics(flat_data)
 
+    # Compute 95th percentile for axis clipping (to handle outliers)
+    ability_95 = np.percentile(ability, 95)
+    money_95 = np.percentile(money, 95)
+    consumption_95 = np.percentile(consumption, 95)
+    labor_95 = np.percentile(labor, 95)
+    savings_95 = np.percentile(savings, 95)
+    savings_ratio_95 = np.percentile(savings_ratio, 95)
+
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
     n_points = len(ability)
@@ -154,9 +162,11 @@ def plot_decision_rules_scatter(data, batch_idx=None, save_path="decision_rules.
     # Add trend line
     z = np.polyfit(ability, consumption, 1)
     p = np.poly1d(z)
-    x_line = np.linspace(ability.min(), ability.max(), 100)
+    x_line = np.linspace(ability.min(), min(ability.max(), ability_95), 100)
     axes[0, 0].plot(x_line, p(x_line), 'r-', linewidth=2,
                     label=f"slope={z[0]:.3f}")
+    axes[0, 0].set_xlim(0, ability_95)
+    axes[0, 0].set_ylim(0, consumption_95)
     axes[0, 0].set_xlabel("Ability", fontsize=11)
     axes[0, 0].set_ylabel("Consumption", fontsize=11)
     axes[0, 0].set_title(f"Consumption vs Ability\n(corr={stats_dict['corr_ability_consumption']:.3f})",
@@ -170,6 +180,8 @@ def plot_decision_rules_scatter(data, batch_idx=None, save_path="decision_rules.
     p = np.poly1d(z)
     axes[0, 1].plot(x_line, p(x_line), 'darkred', linewidth=2,
                     label=f"slope={z[0]:.3f}")
+    axes[0, 1].set_xlim(0, ability_95)
+    axes[0, 1].set_ylim(0, labor_95)
     axes[0, 1].set_xlabel("Ability", fontsize=11)
     axes[0, 1].set_ylabel("Labor", fontsize=11)
     axes[0, 1].set_title(f"Labor vs Ability\n(corr={stats_dict['corr_ability_labor']:.3f})",
@@ -183,6 +195,8 @@ def plot_decision_rules_scatter(data, batch_idx=None, save_path="decision_rules.
     p = np.poly1d(z)
     axes[0, 2].plot(x_line, p(x_line), 'darkgreen', linewidth=2,
                     label=f"slope={z[0]:.3f}")
+    axes[0, 2].set_xlim(0, ability_95)
+    axes[0, 2].set_ylim(0, savings_95)
     axes[0, 2].set_xlabel("Ability", fontsize=11)
     axes[0, 2].set_ylabel("Savings", fontsize=11)
     axes[0, 2].set_title(f"Savings vs Ability\n(corr={stats_dict['corr_ability_savings_ratio']:.3f})",
@@ -196,6 +210,8 @@ def plot_decision_rules_scatter(data, batch_idx=None, save_path="decision_rules.
     p = np.poly1d(z)
     axes[1, 0].plot(x_line, p(x_line), 'darkviolet', linewidth=2,
                     label=f"slope={z[0]:.4f}")
+    axes[1, 0].set_xlim(0, ability_95)
+    axes[1, 0].set_ylim(0, 1)  # Savings ratio is naturally bounded [0, 1]
     axes[1, 0].set_xlabel("Ability", fontsize=11)
     axes[1, 0].set_ylabel("Savings Ratio", fontsize=11)
     axes[1, 0].set_title(f"Savings Ratio vs Ability\n(corr={stats_dict['corr_ability_savings_ratio']:.3f})",
@@ -209,6 +225,8 @@ def plot_decision_rules_scatter(data, batch_idx=None, save_path="decision_rules.
     p = np.poly1d(z)
     axes[1, 1].plot(x_line, p(x_line), 'darkcyan', linewidth=2,
                     label=f"slope={z[0]:.3f}")
+    axes[1, 1].set_xlim(0, ability_95)
+    axes[1, 1].set_ylim(0, money_95)
     axes[1, 1].set_xlabel("Ability", fontsize=11)
     axes[1, 1].set_ylabel("Money Disposable", fontsize=11)
     axes[1, 1].set_title(f"Money vs Ability (Training Manifold)\n(corr={stats_dict['corr_ability_money']:.3f})",
@@ -220,9 +238,11 @@ def plot_decision_rules_scatter(data, batch_idx=None, save_path="decision_rules.
     axes[1, 2].scatter(money[idx], consumption[idx], alpha=0.3, s=10, c='orange')
     z = np.polyfit(money, consumption, 1)
     p = np.poly1d(z)
-    x_line_money = np.linspace(money.min(), money.max(), 100)
+    x_line_money = np.linspace(money.min(), min(money.max(), money_95), 100)
     axes[1, 2].plot(x_line_money, p(x_line_money), 'darkorange', linewidth=2,
                     label=f"slope={z[0]:.3f}")
+    axes[1, 2].set_xlim(0, money_95)
+    axes[1, 2].set_ylim(0, consumption_95)
     axes[1, 2].set_xlabel("Money Disposable", fontsize=11)
     axes[1, 2].set_ylabel("Consumption", fontsize=11)
     axes[1, 2].set_title(f"Consumption vs Money\n(corr={stats_dict['corr_money_consumption']:.3f})",
@@ -298,8 +318,11 @@ def plot_binned_decision_rules(data, batch_idx=None, n_bins=10,
         'savings_ratio': savings_ratio,
     }
 
-    # Create ability bins
-    ability_bins = np.linspace(ability.min(), ability.max(), n_bins + 1)
+    # Compute 95th percentile for axis clipping
+    ability_95 = np.percentile(ability, 95)
+
+    # Create ability bins (using 95th percentile to avoid outliers)
+    ability_bins = np.linspace(ability.min(), ability_95, n_bins + 1)
     bin_centers = (ability_bins[:-1] + ability_bins[1:]) / 2
     bin_indices = np.digitize(ability, ability_bins) - 1
     bin_indices = np.clip(bin_indices, 0, n_bins - 1)
