@@ -313,7 +313,8 @@ class EconomyEnv:
         is_superstar_t: Tensor,
         ability_history_t: Optional[Tensor],
         branch: Literal["A", "B"],
-        deterministic: bool = False
+        deterministic: bool = False,
+        fix: bool = False
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Transition ability using AR(1) + superstar dynamics.
@@ -324,12 +325,24 @@ class EconomyEnv:
             ability_history_t: Current ability history (L, B, A) or None
             branch: Which branch ("A" or "B")
             deterministic: If True, no random shocks
+            fix: If True, return ability unchanged (complete markets)
 
         Returns:
             ability_tp1: Next period ability (B, A)
             is_superstar_tp1: Next period superstar status (B, A)
             ability_history_tp1: Updated ability history (L, B, A)
         """
+        # If fix=True, return ability unchanged
+        if fix:
+            # Still need to update history with the unchanged ability
+            ability_history_tp1 = ability_history_t
+            if ability_history_tp1 is None:
+                from src.shocks import update_ability_history
+                ability_history_tp1 = update_ability_history(
+                    ability_history_t, ability_t, self.history_length
+                )
+            return ability_t.detach(), is_superstar_t.detach(), ability_history_tp1
+
         # Use the transition_ability_with_history function from shocks module
         ability_tp1, is_superstar_tp1, ability_history_tp1 = transition_ability_with_history(
             ability_t=ability_t,
@@ -346,7 +359,8 @@ class EconomyEnv:
         self,
         temp_state: TemporaryState,
         branch: Literal["A", "B"],
-        deterministic: bool = False
+        deterministic: bool = False,
+        fix: bool = False
     ) -> ParallelState:
         """
         STEP 2: Transition from TemporaryState to ParallelState.
@@ -357,6 +371,7 @@ class EconomyEnv:
             temp_state: TemporaryState at time t
             branch: Which branch to create ("A" or "B")
             deterministic: If True, no random shocks
+            fix: If True, return ability unchanged (complete markets)
 
         Returns:
             parallel_state: ParallelState for the specified branch
@@ -371,7 +386,8 @@ class EconomyEnv:
             is_superstar_t=is_superstar_t,
             ability_history_t=ability_history_t,
             branch=branch,
-            deterministic=deterministic
+            deterministic=deterministic,
+            fix=fix
         )
 
         # Compute next period savings: savings[t+1] = money_disposable[t] * savings_ratio
@@ -527,6 +543,7 @@ class EconomyEnv:
         policy_net,
         *,
         deterministic: bool = False,
+        fix: bool = False,
         update_normalizer: bool = True,
         commit_strategy: Literal["random", "A", "B"] = "random"
     ) -> Tuple[MainState, TemporaryState, Tuple[ParallelState, Dict], Tuple[ParallelState, Dict]]:
@@ -544,6 +561,7 @@ class EconomyEnv:
             main_state: Current MainState at time t (will be modified in-place)
             policy_net: Policy network for agent decisions
             deterministic: If True, no random shocks
+            fix: If True, return ability unchanged (complete markets)
             update_normalizer: If True, update normalizer statistics
             commit_strategy: How to choose branch ("random", "A", "B")
 
@@ -564,13 +582,15 @@ class EconomyEnv:
         parallel_A = self.transition_to_parallel(
             temp_state=temp_state,
             branch="A",
-            deterministic=deterministic
+            deterministic=deterministic,
+            fix=fix
         )
         # print(f"!!!!!!!!!!! MD in temporaray State transition 2 Parallel {parallel_A.moneydisposable.mean()}")
         parallel_B = self.transition_to_parallel(
             temp_state=temp_state,
             branch="B",
-            deterministic=deterministic
+            deterministic=deterministic,
+            fix=fix
         )
 
         # STEP 4: Compute outcomes for both branches (returns updated parallel states)
@@ -607,6 +627,7 @@ class EconomyEnv:
         n_steps: int,
         *,
         deterministic: bool = False,
+        fix: bool = False,
         update_normalizer: bool = True,
         commit_strategy: Literal["random", "A", "B"] = "random"
     ) -> Tuple[MainState, list]:
@@ -618,6 +639,7 @@ class EconomyEnv:
             policy_net: Policy network
             n_steps: Number of steps to execute
             deterministic: If True, no random shocks
+            fix: If True, return ability unchanged (complete markets)
             update_normalizer: If True, update normalizer statistics
             commit_strategy: How to choose branch
 
@@ -632,6 +654,7 @@ class EconomyEnv:
                 main_state=main_state,
                 policy_net=policy_net,
                 deterministic=deterministic,
+                fix=fix,
                 update_normalizer=update_normalizer,
                 commit_strategy=commit_strategy
             )
