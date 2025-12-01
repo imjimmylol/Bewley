@@ -20,3 +20,14 @@
 - 把稅加回 v.s 把稅令為一個常數
 
 
+# Candidate Shock Process
+Incomplete market shock design 
+- Permenent income + env aggregate 
+    - ($e_t=e_t+\epsilon_t+\delta_t$)
+    - two shock 
+
+- finite-state first-order Markov process
+
+- AR with ex-ante type
+    - type set $\theta$
+    - $z_{t+1}=(1-\rho)\mu_{\theta}+\rho z_t+$
