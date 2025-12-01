@@ -52,15 +52,36 @@ def initialize_env_state(config, device="cpu"):
     moneydisposable=np.random.lognormal(np.log(config.initial_state.moneydisposable_mean), config.initial_state.moneydisposable_std, batch_size * n_agents).reshape(batch_size, n_agents)
     savings= np.random.lognormal(np.log(config.initial_state.assets_mean), config.initial_state.assets_std, batch_size * n_agents).reshape(batch_size, n_agents)
 
-    # Initialize ability from stationary distribution of AR(1) process
-    # AR(1): log(v[t+1]) = (1-rho)*log(v_bar) + rho*log(v[t]) + eps
-    # Stationary: mean = log(v_bar), variance = sigma_v^2 / (1 - rho_v^2)
-    rho_v = config.shock.rho_v
-    sigma_v = config.shock.sigma_v
-    v_bar = config.shock.v_bar
-    ability_log_mean = np.log(v_bar)
-    ability_log_std = sigma_v / np.sqrt(1 - rho_v**2)
-    ability = np.random.lognormal(ability_log_mean, ability_log_std, batch_size * n_agents).reshape(batch_size, n_agents)
+    # Initialize ability using bounded distribution (prevents explosion)
+    # Use IQ-like distribution: realistic, bounded, prevents model collapse
+    from src.ability_init import initialize_ability
+
+    # Get initialization method from config (default: iq_like)
+    init_method = getattr(config.initial_state, 'ability_init_method', 'iq_like')
+
+    if init_method == 'iq_like':
+        # Recommended: bounded log-normal like real ability distribution
+        ability_mean = getattr(config.initial_state, 'ability_mean', 1.0)
+        ability_cv = getattr(config.initial_state, 'ability_cv', 0.3)
+        ability_min = getattr(config.initial_state, 'ability_min', 0.3)
+        ability_max = getattr(config.initial_state, 'ability_max', 3.0)
+
+        ability = initialize_ability(
+            batch_size, n_agents,
+            method='iq_like',
+            mean=ability_mean,
+            cv=ability_cv,
+            min_ability=ability_min,
+            max_ability=ability_max
+        )
+    else:
+        # Fallback: stationary AR(1) with clipping (old method)
+        ability = initialize_ability(
+            batch_size, n_agents,
+            method='stationary',
+            config=config,
+            clip_sigma=2.0  # Clip to ±2σ to prevent explosion
+        )
 
     is_superstar_vA = np.zeros((batch_size, n_agents), dtype=bool)
     is_superstar_vB = np.zeros((batch_size, n_agents), dtype=bool)

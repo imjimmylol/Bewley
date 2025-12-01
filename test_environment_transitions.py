@@ -68,6 +68,7 @@ def test_shock_distribution(config, n_steps=100):
             main_state=state,
             policy_net=policy_net,
             deterministic=False,
+            fix=False,
             update_normalizer=True,
             commit_strategy="random"
         )
@@ -195,6 +196,7 @@ def test_with_fixed_ability(config):
             main_state=state,
             policy_net=policy_net,
             deterministic=False,
+            fix=False,
             update_normalizer=True,
             commit_strategy="random"
         )
