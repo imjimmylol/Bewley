@@ -163,6 +163,12 @@ def train(config, run):
 
     # --- 4. Training Loop ---
     print("Starting training loop with environment stepping...")
+
+    # Get market completeness flag from config
+    fix_ability = getattr(config.bewley_model, 'fix', False)
+    market_type = "COMPLETE" if fix_ability else "INCOMPLETE"
+    print(f"  - Market type: {market_type} (fix={fix_ability})")
+
     total_steps = config.training.training_steps
     for step in tqdm(range(1, total_steps + 1), total=total_steps, desc="Training", ncols=100):
         # ==== STEP THE ENVIRONMENT ====
@@ -176,6 +182,7 @@ def train(config, run):
             main_state=main_state,
             policy_net=policy_net,
             deterministic=False,
+            fix=fix_ability,  # Read from config: complete vs incomplete markets
             update_normalizer=True,
             commit_strategy="random"
         )
