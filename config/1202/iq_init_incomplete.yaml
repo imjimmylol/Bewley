@@ -76,7 +76,7 @@ shock:
   sigma_v: 0.36      # std of ability shock
   v_bar: 5           # long-run mean (not used with iq_init)
   p: 2.2e-6          # prob of becoming superstar
-  q: 0.99            # prob of remaining superstar
+  q: 0.95            # prob of remaining superstar
 
   # OPTIONAL: You may want to REDUCE these for more stable dynamics:
   # rho_v: 0.9       # Less persistent (mean reversion in ~10 periods)
