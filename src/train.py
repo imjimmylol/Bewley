@@ -161,6 +161,15 @@ def train(config, run):
     # Initialize training monitor for metrics and logging
     monitor = TrainingMonitor(config=config, normalizer=normalizer)
 
+    # --- 3.5 Plot initial state distributions before training ---
+    print("Plotting initial state distributions...")
+    plot_state_distributions(
+        main_state,
+        save_path=os.path.join(base_checkpoint_dir, "state_distributions_initial.png"),
+        log_to_wandb=True,
+        step=0
+    )
+
     # --- 4. Training Loop ---
     print("Starting training loop with environment stepping...")
 

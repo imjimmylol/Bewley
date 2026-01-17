@@ -1,0 +1,84 @@
+# config/iq_init.yaml
+# Configuration with IQ-like ability initialization (RECOMMENDED)
+# This prevents ability explosion and model collapse
+
+# Experiment name
+exp_name: "bewley_iq_init_complete_notax"
+
+training:
+  agents: 100
+  learning_rate: 1e-4
+  training_steps: 5000
+  batch_size: 32
+  display_step: 1000
+  train_step_interval: 4
+  save_interval: 1000
+
+bewley_model:
+  theta: 1.0         # CRRA
+  beta: 0.96        # Discount factor
+  A: 1.0             # Technology parameter
+  alpha: 0.33        # Capital share of income
+  gamma: 2.0         # Inverse Frisch elasticity
+  r: 0.04            # Interest rate (return to savings)
+  delta: 0.06        # Depreciation rate of capital
+  fix: true          # Complete markets: ability is fixed (no shocks)
+
+initial_state:
+  moneydisposable_mean: 2.0
+  moneydisposable_std: 0.5
+  assets_mean: 1.0
+  assets_std: 0.5
+
+  # ============================================================
+  # ABILITY INITIALIZATION (IQ-LIKE DISTRIBUTION)
+  # ============================================================
+  # Use bounded log-normal distribution to prevent explosion
+  # This is MORE REALISTIC than unbounded AR(1) stationary dist
+  # ============================================================
+
+  ability_init_method: "iq_like"  # Options: "iq_like", "stationary", "narrow_uniform"
+
+  # Target mean ability
+  # Use mean=1.0 for normalized ability, or mean=10 for compatibility with old v_bar=5 scale
+  ability_mean: 10
+
+  # Coefficient of variation = std/mean (controls dispersion)
+  # RECOMMENDATIONS:
+  #   cv=0.15-0.25: Conservative (like IQ distribution)
+  #   cv=0.3-0.4:   Moderate (like earnings distribution) - DEFAULT
+  #   cv=0.6-0.8:   High inequality (like wealth distribution)
+  ability_cv: 0.3
+
+  # Hard bounds (prevent extreme outliers that cause model collapse)
+  # IMPORTANT: Bounds should scale with mean!
+  # Rule: min = mean * 0.3, max = mean * 3.0
+  ability_min: 3.0   # 30% of mean=10 (low-skill workers)
+  ability_max: 30.0  # 300% of mean=10 (high-skill workers)
+
+  # INTERPRETATION:
+  # - Most agents cluster near mean=1.0
+  # - 95% fall within [0.5, 1.7] approximately
+  # - No extreme outliers (unlike unbounded AR(1))
+  # - Wages and returns remain stable over time
+
+tax_params:
+  tax_consumption: 0
+  tax_income: 0
+  tax_saving: 0
+  income_tax_elasticity: 0
+  saving_tax_elasticity: 0
+
+shock:
+  # NOTE: These parameters are for TRANSITIONS, not initialization
+  # They still affect dynamics but bounded init prevents explosion
+  rho_v: 0.98        # persistence of ability shock
+  sigma_v: 0.36      # std of ability shock
+  v_bar: 5           # long-run mean (not used with iq_init)
+  p: 2.2e-6          # prob of becoming superstar
+  q: 0.95            # prob of remaining superstar
+
+  # OPTIONAL: You may want to REDUCE these for more stable dynamics:
+  # rho_v: 0.9       # Less persistent (mean reversion in ~10 periods)
+  # sigma_v: 0.1     # Smaller shocks
+  # This would make ability distribution more stable over time

@@ -24,7 +24,7 @@ def main():
     parser.add_argument(
         '--project',
         type=str,
-        default='Bewley-Project-Example',
+        default='Bewley-Project',
         help='Wandb project name (default: Bewley-Project-Example)'
     )
     args, unknown = parser.parse_known_args()
