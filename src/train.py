@@ -14,7 +14,13 @@ from src.visualization import (
     prepare_data_for_plotting,
     plot_decision_rules_scatter,
     plot_binned_decision_rules,
-    plot_state_distributions
+    plot_state_distributions,
+    plot_all_decision_rules
+)
+from src.policy_evaluation import (
+    HistoricalRanges,
+    PolicyEvaluator,
+    collect_ranges_from_step
 )
 import numpy as np
 
@@ -161,6 +167,9 @@ def train(config, run):
     # Initialize training monitor for metrics and logging
     monitor = TrainingMonitor(config=config, normalizer=normalizer)
 
+    # Initialize historical ranges for synthetic grid evaluation
+    historical_ranges = HistoricalRanges()
+
     # --- 3.5 Plot initial state distributions before training ---
     print("Plotting initial state distributions...")
     plot_state_distributions(
@@ -265,6 +274,9 @@ def train(config, run):
         # ==== MONITORING: Log metrics, correlations, and debug info ====
         monitor.log_step(step, main_state, temp_state, loss)
 
+        # ==== COLLECT HISTORICAL RANGES for synthetic grid evaluation ====
+        historical_ranges = collect_ranges_from_step(temp_state, main_state, historical_ranges)
+
         # ==== VISUALIZATION: Generate decision rule plots at checkpoint intervals ====
         if step % config.training.save_interval == 0:
             print(f"\nGenerating decision rule visualizations at step {step}...")
@@ -296,6 +308,25 @@ def train(config, run):
                 log_to_wandb=True,
                 step=step
             )
+
+            # ==== NEW: Synthetic Grid Decision Rule Plots (A1, B1) ====
+            # Only generate if we have collected enough data
+            if historical_ranges.m_t.count > 0:
+                print(f"Generating synthetic grid decision rule plots...")
+                evaluator = PolicyEvaluator(
+                    policy_net=policy_net,
+                    normalizer=normalizer,
+                    ranges=historical_ranges,
+                    tax_params=main_state.tax_params[0],  # Use first batch's tax params
+                    device=device
+                )
+                plot_all_decision_rules(
+                    evaluator=evaluator,
+                    save_dir=os.path.join(base_checkpoint_dir, "decision_rules"),
+                    log_to_wandb=True,
+                    step=step,
+                    plots=["A1", "B1"]
+                )
 
         # CRITICAL: Clear temporary variables to prevent memory leaks
         # Delete tensors that have computational graphs attached

@@ -11,6 +11,24 @@ import matplotlib.pyplot as plt
 from scipy import stats
 import wandb
 import torch
+from typing import Optional, Dict, List
+
+
+# =============================================================================
+# Color palette for quantile-based conditioning (5 levels)
+# =============================================================================
+QUANTILE_COLORS = {
+    "q5": "#1f77b4",    # blue
+    "q25": "#2ca02c",   # green
+    "q50": "#ff7f0e",   # orange
+    "q75": "#d62728",   # red
+    "q95": "#9467bd",   # purple
+    # For discrete s_t
+    "Normal": "#1f77b4",
+    "Superstar": "#d62728",
+    # Fallback
+    "mean": "#333333",
+}
 
 
 def prepare_data_for_plotting(main_state, temp_state):
@@ -573,3 +591,282 @@ def plot_state_distributions(state, save_path="state_distributions.png",
         })
 
     plt.close()
+
+
+# =============================================================================
+# New Decision Rule Visualization (Synthetic Grid Evaluation)
+# Following CLAUDE.local.md methodology
+# =============================================================================
+
+def _format_axis_label(var_name: str, use_latex: bool = True) -> str:
+    """Convert variable name to formatted axis label."""
+    labels = {
+        "m_t": r"$m_t$ (Money Disposable)" if use_latex else "m_t (Money Disposable)",
+        "a_t": r"$a_t$ (Assets)" if use_latex else "a_t (Assets)",
+        "v_t": r"$v_t$ (Ability)" if use_latex else "v_t (Ability)",
+        "s_t": r"$s_t$ (Regime)" if use_latex else "s_t (Regime)",
+        "y_t": r"$y_t$ (Income)" if use_latex else "y_t (Income)",
+        "c_t": r"$c_t$ (Consumption)" if use_latex else "c_t (Consumption)",
+        "a_tp1": r"$a_{t+1}$ (Next Assets)" if use_latex else "a_{t+1} (Next Assets)",
+        "zeta_t": r"$\zeta_t$ (Savings Ratio)" if use_latex else "zeta_t (Savings Ratio)",
+        "da_t": r"$\Delta a_t$ (Net Saving)" if use_latex else "da_t (Net Saving)",
+        "l_t": r"$l_t$ (Labor)" if use_latex else "l_t (Labor)",
+        "mu_t": r"$\mu_t$ (Multiplier)" if use_latex else "mu_t (Multiplier)",
+        "I_bind": r"$\mathbb{1}[a_{t+1}=0]$ (Binding)" if use_latex else "I[a_{t+1}=0] (Binding)",
+    }
+    return labels.get(var_name, var_name)
+
+
+def _add_reference_lines(ax, ref_lines: List[str], x_values: np.ndarray) -> None:
+    """Add reference lines to axis."""
+    for ref in ref_lines:
+        if ref == "y=0":
+            ax.axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.7, label='y=0')
+        elif ref == "y=x":
+            ax.plot(x_values, x_values, color='gray', linestyle='--', linewidth=1, alpha=0.7, label='y=x')
+
+
+def plot_decision_rule(
+    evaluator,  # PolicyEvaluator
+    x_var: str,
+    y_var: str,
+    color_var: Optional[str] = None,
+    fixed_vars: Optional[Dict] = None,
+    use_log1p_x: bool = False,
+    ref_lines: Optional[List[str]] = None,
+    title: Optional[str] = None,
+    save_path: Optional[str] = None,
+    log_to_wandb: bool = False,
+    step: Optional[int] = None,
+    n_points: int = 100
+) -> plt.Figure:
+    """
+    Plot a decision rule using synthetic grid evaluation.
+
+    This is the master plotting function that uses PolicyEvaluator to generate
+    synthetic grid data with controlled conditioning variables.
+
+    Args:
+        evaluator: PolicyEvaluator instance
+        x_var: Variable for x-axis (e.g., "m_t", "a_t")
+        y_var: Variable for y-axis (e.g., "c_t", "a_tp1")
+        color_var: Optional variable for color conditioning (5 quantile levels)
+        fixed_vars: Optional dict of {var_name: value} for fixed variables
+        use_log1p_x: If True, apply log1p transform to x-axis
+        ref_lines: List of reference lines to add (e.g., ["y=0", "y=x"])
+        title: Optional custom title
+        save_path: Where to save the plot
+        log_to_wandb: If True, log to wandb
+        step: Training step for wandb
+        n_points: Number of grid points
+
+    Returns:
+        matplotlib Figure
+    """
+    if ref_lines is None:
+        ref_lines = []
+
+    # Evaluate on grid
+    results = evaluator.evaluate_on_grid(
+        x_var=x_var,
+        y_var=y_var,
+        color_var=color_var,
+        fixed_vars=fixed_vars,
+        n_points=n_points
+    )
+
+    x_values = results["x_values"]
+    y_values = results["y_values"]
+    color_levels = results["color_levels"]
+    color_values = results["color_values"]
+    fixed_values = results["fixed_values"]
+
+    # Transform x if needed
+    if use_log1p_x:
+        x_plot = np.log1p(x_values)
+        x_label = f"log(1 + {_format_axis_label(x_var)})"
+    else:
+        x_plot = x_values
+        x_label = _format_axis_label(x_var)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    # Plot each color level
+    for c_label, c_val in zip(color_levels, color_values):
+        y_arr = y_values[c_label]
+        color = QUANTILE_COLORS.get(c_label, "#333333")
+
+        # Format legend label
+        if color_var and c_val is not None:
+            if color_var == "s_t":
+                legend_label = c_label
+            else:
+                legend_label = f"{color_var}={c_val:.2f} ({c_label})"
+        else:
+            legend_label = "Policy"
+
+        ax.plot(x_plot, y_arr, color=color, linewidth=2, label=legend_label)
+
+    # Add reference lines
+    _add_reference_lines(ax, ref_lines, x_plot if not use_log1p_x else x_values)
+
+    # Labels and title
+    ax.set_xlabel(x_label, fontsize=12)
+    ax.set_ylabel(_format_axis_label(y_var), fontsize=12)
+
+    if title:
+        ax.set_title(title, fontsize=14, fontweight='bold')
+    else:
+        title_str = f"Decision Rule: {x_var} → {y_var}"
+        if color_var:
+            title_str += f" (color by {color_var})"
+        ax.set_title(title_str, fontsize=14, fontweight='bold')
+
+    # Add fixed variables info
+    fixed_str = ", ".join([f"{k}={v:.2f}" for k, v in fixed_values.items()])
+    ax.text(0.02, 0.98, f"Fixed: {fixed_str}", transform=ax.transAxes,
+            fontsize=9, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    ax.legend(loc='best', fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    # Save
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Decision rule plot saved to: {save_path}")
+
+    # Log to wandb
+    if log_to_wandb and wandb.run:
+        wandb.log({
+            f"decision_rules/{x_var}_to_{y_var}": wandb.Image(fig),
+            "step": step
+        })
+
+    return fig
+
+
+def plot_A1_resources_to_assets(
+    evaluator,
+    color_var: str = "v_t",
+    save_path: Optional[str] = None,
+    log_to_wandb: bool = False,
+    step: Optional[int] = None
+) -> plt.Figure:
+    """
+    Plot A1: m_t → a_{t+1} (Resources to Next Assets)
+
+    Shows how agents allocate resources to savings across different ability levels.
+
+    Args:
+        evaluator: PolicyEvaluator instance
+        color_var: Variable for color conditioning (default: "v_t")
+        save_path: Where to save
+        log_to_wandb: Log to wandb
+        step: Training step
+
+    Returns:
+        matplotlib Figure
+    """
+    fig = plot_decision_rule(
+        evaluator=evaluator,
+        x_var="m_t",
+        y_var="a_tp1",
+        color_var=color_var,
+        use_log1p_x=True,
+        ref_lines=["y=0"],
+        title=r"A1: $m_t \rightarrow a_{t+1}$ (Resources to Next Assets)",
+        save_path=save_path,
+        log_to_wandb=log_to_wandb,
+        step=step
+    )
+    return fig
+
+
+def plot_B1_assets_to_assets(
+    evaluator,
+    color_var: str = "v_t",
+    save_path: Optional[str] = None,
+    log_to_wandb: bool = False,
+    step: Optional[int] = None
+) -> plt.Figure:
+    """
+    Plot B1: a_t → a_{t+1} (Assets Today to Assets Tomorrow)
+
+    Shows history dependence - how current assets predict future assets.
+    The 45-degree line (y=x) shows where assets would remain unchanged.
+
+    Args:
+        evaluator: PolicyEvaluator instance
+        color_var: Variable for color conditioning (default: "v_t")
+        save_path: Where to save
+        log_to_wandb: Log to wandb
+        step: Training step
+
+    Returns:
+        matplotlib Figure
+    """
+    fig = plot_decision_rule(
+        evaluator=evaluator,
+        x_var="a_t",
+        y_var="a_tp1",
+        color_var=color_var,
+        use_log1p_x=True,
+        ref_lines=["y=0", "y=x"],
+        title=r"B1: $a_t \rightarrow a_{t+1}$ (Assets Today to Tomorrow)",
+        save_path=save_path,
+        log_to_wandb=log_to_wandb,
+        step=step
+    )
+    return fig
+
+
+def plot_all_decision_rules(
+    evaluator,
+    save_dir: str,
+    log_to_wandb: bool = False,
+    step: Optional[int] = None,
+    plots: Optional[List[str]] = None
+) -> Dict[str, plt.Figure]:
+    """
+    Generate all (or selected) decision rule plots.
+
+    Args:
+        evaluator: PolicyEvaluator instance
+        save_dir: Directory to save plots
+        log_to_wandb: Log to wandb
+        step: Training step
+        plots: List of plot IDs to generate (default: ["A1", "B1"])
+
+    Returns:
+        Dict mapping plot ID to Figure
+    """
+    import os
+    os.makedirs(save_dir, exist_ok=True)
+
+    if plots is None:
+        plots = ["A1", "B1"]
+
+    figures = {}
+
+    plot_funcs = {
+        "A1": plot_A1_resources_to_assets,
+        "B1": plot_B1_assets_to_assets,
+    }
+
+    for plot_id in plots:
+        if plot_id in plot_funcs:
+            save_path = os.path.join(save_dir, f"fig_{plot_id}_step_{step}.png") if step else os.path.join(save_dir, f"fig_{plot_id}.png")
+            fig = plot_funcs[plot_id](
+                evaluator=evaluator,
+                save_path=save_path,
+                log_to_wandb=log_to_wandb,
+                step=step
+            )
+            figures[plot_id] = fig
+            plt.close(fig)
+
+    return figures
