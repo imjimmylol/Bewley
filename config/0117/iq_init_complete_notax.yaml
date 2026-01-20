@@ -16,7 +16,7 @@ training:
 
 bewley_model:
   theta: 1.0         # CRRA
-  beta: 0.96        # Discount factor
+  beta: 0.96         # Discount factor
   A: 1.0             # Technology parameter
   alpha: 0.33        # Capital share of income
   gamma: 2.0         # Inverse Frisch elasticity

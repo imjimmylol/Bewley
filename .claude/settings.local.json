@@ -3,7 +3,8 @@
     "allow": [
       "Bash(source:*)",
       "Bash(conda activate:*)",
-      "Bash(python test_shocks.py:*)"
+      "Bash(python test_shocks.py:*)",
+      "Bash(PYTHONPATH=. /opt/miniconda3/envs/sml/bin/python:*)"
     ],
     "deny": [],
     "ask": []

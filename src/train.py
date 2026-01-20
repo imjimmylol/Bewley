@@ -92,11 +92,16 @@ def initialize_env_state(config, device="cpu"):
     is_superstar_vA = np.zeros((batch_size, n_agents), dtype=bool)
     is_superstar_vB = np.zeros((batch_size, n_agents), dtype=bool)
 
+    # Create ret as a tensor with shape (batch_size, n_agents) for consistency
+    # This ensures ret is a tensor from the start (same as after first training step)
+    ret_value = config.bewley_model.r
+    ret_tensor = torch.full((batch_size, n_agents), ret_value, dtype=torch.float32, device=device)
+
     state = MainState(
         moneydisposable = torch.tensor(moneydisposable, dtype=torch.float32, device=device),
         savings = torch.tensor(savings, dtype=torch.float32, device=device),
         ability = torch.tensor(ability, dtype=torch.float32, device=device),
-        ret = config.bewley_model.r,
+        ret = ret_tensor,
         tax_params=tax_params,
         is_superstar_vA = torch.tensor(is_superstar_vA, dtype=torch.bool, device=device),
         is_superstar_vB = torch.tensor(is_superstar_vB, dtype=torch.bool, device=device),
@@ -144,7 +149,12 @@ def train(config, run):
     else torch.device("cpu")
     )
     print(f"Using device: {device}")
-    normalizer = RunningPerAgentWelford(batch_dim=0, agent_dim=1)
+    # Per-agent mode: each agent has its own normalization statistics
+    # normalizer = RunningPerAgentWelford(batch_dim=0, agent_dim=1)
+
+    # Global mode: all agents share the same mean/std statistics
+    # This ensures decision rule evaluation works correctly for any (m_t, v_t) combination
+    normalizer = RunningPerAgentWelford(batch_dim=0, agent_dim=None)
     env = EconomyEnv(config, normalizer, device=device)
     policy_net = FiLMResNet2In(
         state_dim=2*config.training.agents+2,
@@ -169,7 +179,7 @@ def train(config, run):
 
     # Initialize historical ranges for synthetic grid evaluation
     historical_ranges = HistoricalRanges()
-
+    
     # --- 3.5 Plot initial state distributions before training ---
     print("Plotting initial state distributions...")
     plot_state_distributions(
@@ -313,12 +323,20 @@ def train(config, run):
             # Only generate if we have collected enough data
             if historical_ranges.m_t.count > 0:
                 print(f"Generating synthetic grid decision rule plots...")
+                # Create reference state from current simulation for GE-aware evaluation
+                # This uses actual tensors as background population (detached from graph)
+                reference_state = {
+                    "money": money_disposable_t.detach(),  # (B, A)
+                    "ability": ability_t.detach(),  # (B, A)
+                }
                 evaluator = PolicyEvaluator(
                     policy_net=policy_net,
                     normalizer=normalizer,
                     ranges=historical_ranges,
                     tax_params=main_state.tax_params[0],  # Use first batch's tax params
-                    device=device
+                    n_agents=config.training.agents,  # Pass n_agents for proper input shape
+                    device=device,
+                    reference_state=reference_state  # Pass actual GE simulation data
                 )
                 plot_all_decision_rules(
                     evaluator=evaluator,
