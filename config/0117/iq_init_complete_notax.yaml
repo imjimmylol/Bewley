@@ -8,7 +8,7 @@ exp_name: "bewley_iq_init_complete_notax"
 training:
   agents: 100
   learning_rate: 1e-4
-  training_steps: 3000
+  training_steps: 5000
   batch_size: 32
   display_step: 1000
   train_step_interval: 4
