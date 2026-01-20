@@ -3,7 +3,7 @@
 # This prevents ability explosion and model collapse
 
 # Experiment name
-exp_name: "bewley_iq_init_complete_notax"
+exp_name: "bewley_iq_init_incomplete_notax_high_uncer"
 
 training:
   agents: 100
@@ -22,7 +22,7 @@ bewley_model:
   gamma: 2.0         # Inverse Frisch elasticity
   r: 0.04            # Interest rate (return to savings)
   delta: 0.06        # Depreciation rate of capital
-  fix: true          # Complete markets: ability is fixed (no shocks)
+  fix: false         # Incomplete markets: ability transitions with AR(1) + superstar shocks
 
 initial_state:
   moneydisposable_mean: 2.0
@@ -73,7 +73,7 @@ shock:
   # NOTE: These parameters are for TRANSITIONS, not initialization
   # They still affect dynamics but bounded init prevents explosion
   rho_v: 0.98        # persistence of ability shock
-  sigma_v: 0.36      # std of ability shock
+  sigma_v: 0.5      # std of ability shock
   v_bar: 5           # long-run mean (not used with iq_init)
   p: 2.2e-6          # prob of becoming superstar
   q: 0.95            # prob of remaining superstar
