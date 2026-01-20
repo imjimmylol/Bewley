@@ -667,7 +667,9 @@ def plot_decision_rule(
     log_to_wandb: bool = False,
     step: Optional[int] = None,
     n_points: int = 100,
-    debug: bool = False
+    debug: bool = False,
+    xlim: Optional[tuple] = None,
+    ylim: Optional[tuple] = None
 ) -> plt.Figure:
     """
     Plot a decision rule using synthetic grid evaluation.
@@ -688,6 +690,10 @@ def plot_decision_rule(
         log_to_wandb: If True, log to wandb
         step: Training step for wandb
         n_points: Number of grid points
+        debug: If True, print debug information
+        xlim: Optional tuple (xmin, xmax) for manual x-axis clipping (in original scale,
+              before log1p transform if use_log1p_x=True)
+        ylim: Optional tuple (ymin, ymax) for manual y-axis clipping
 
     Returns:
         matplotlib Figure
@@ -738,12 +744,12 @@ def plot_decision_rule(
 
         ax.plot(x_plot, y_arr, color=color, linewidth=2, label=legend_label)
 
-    # Add reference lines
-    _add_reference_lines(ax, ref_lines, x_plot if not use_log1p_x else x_values)
+    # # Add reference lines
+    # _add_reference_lines(ax, ref_lines, x_plot if not use_log1p_x else x_values)
 
-    # Add log1p validity line when using log transform
-    if use_log1p_x:
-        _add_log1p_validity_line(ax, threshold=1.0)
+    # # Add log1p validity line when using log transform
+    # if use_log1p_x:
+    #     _add_log1p_validity_line(ax, threshold=5)
 
     # Labels and title
     ax.set_xlabel(x_label, fontsize=12)
@@ -765,6 +771,16 @@ def plot_decision_rule(
 
     ax.legend(loc='best', fontsize=10)
     ax.grid(True, alpha=0.3)
+
+    # Apply manual axis limits if specified
+    if xlim is not None:
+        if use_log1p_x:
+            # Transform xlim to log1p scale
+            ax.set_xlim(np.log1p(xlim[0]), np.log1p(xlim[1]))
+        else:
+            ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
 
     plt.tight_layout()
 
@@ -789,7 +805,9 @@ def plot_A1_resources_to_assets(
     save_path: Optional[str] = None,
     log_to_wandb: bool = False,
     step: Optional[int] = None,
-    debug: bool = False
+    debug: bool = False,
+    xlim: Optional[tuple] = None,
+    ylim: Optional[tuple] = None
 ) -> plt.Figure:
     """
     Plot A1: m_t → a_{t+1} (Resources to Next Assets)
@@ -803,6 +821,8 @@ def plot_A1_resources_to_assets(
         log_to_wandb: Log to wandb
         step: Training step
         debug: If True, print debug information
+        xlim: Optional tuple (xmin, xmax) for manual x-axis clipping (in original scale)
+        ylim: Optional tuple (ymin, ymax) for manual y-axis clipping
 
     Returns:
         matplotlib Figure
@@ -812,14 +832,126 @@ def plot_A1_resources_to_assets(
         x_var="m_t",
         y_var="a_tp1",
         color_var=color_var,
-        use_log1p_x=False,
+        use_log1p_x=True,
         ref_lines=["y=0"],
         title=r"A1: $m_t \rightarrow a_{t+1}$ (Resources to Next Assets)",
         save_path=save_path,
         log_to_wandb=log_to_wandb,
         step=step,
+        debug=debug,
+        xlim=xlim,
+        ylim=ylim
+    )
+    return fig
+
+
+def plot_A1_1_MPS(
+    evaluator,
+    color_var: str = "v_t",
+    save_path: Optional[str] = None,
+    log_to_wandb: bool = False,
+    step: Optional[int] = None,
+    debug: bool = False,
+    xlim: Optional[tuple] = None,
+    ylim: Optional[tuple] = None,
+    n_points: int = 100
+) -> plt.Figure:
+    """
+    Plot A1-1: MPS (Marginal Propensity to Save) - the slope of m_t → a_{t+1}.
+
+    This is the derivative of the A1 plot, showing how the savings response
+    changes with resources at different ability levels.
+
+    Args:
+        evaluator: PolicyEvaluator instance
+        color_var: Variable for color conditioning (default: "v_t")
+        save_path: Where to save
+        log_to_wandb: Log to wandb
+        step: Training step
+        debug: If True, print debug information
+        xlim: Optional tuple (xmin, xmax) for manual x-axis clipping
+        ylim: Optional tuple (ymin, ymax) for manual y-axis clipping
+        n_points: Number of grid points for evaluation
+
+    Returns:
+        matplotlib Figure
+    """
+    # Evaluate on grid to get a_tp1 values
+    results = evaluator.evaluate_on_grid(
+        x_var="m_t",
+        y_var="a_tp1",
+        color_var=color_var,
+        n_points=n_points,
         debug=debug
     )
+
+    x_values = results["x_values"]
+    y_values = results["y_values"]
+    color_levels = results["color_levels"]
+    color_values = results["color_values"]
+    fixed_values = results["fixed_values"]
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    # Compute and plot MPS (slope) for each color level
+    for c_label, c_val in zip(color_levels, color_values):
+        y_arr = y_values[c_label]
+        color = QUANTILE_COLORS.get(c_label, "#333333")
+
+        # Compute MPS as finite difference: d(a_tp1)/d(m_t)
+        # Use central differences for interior points
+        mps = np.gradient(y_arr, x_values)
+
+        # Format legend label
+        if color_var and c_val is not None:
+            if color_var == "s_t":
+                legend_label = c_label
+            else:
+                legend_label = f"{color_var}={c_val:.2f} ({c_label})"
+        else:
+            legend_label = "MPS"
+
+        ax.plot(x_values, mps, color=color, linewidth=2, label=legend_label)
+
+    # Add reference lines
+    ax.axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.7, label='MPS=0')
+    ax.axhline(y=1, color='gray', linestyle=':', linewidth=1, alpha=0.7, label='MPS=1')
+
+    # Labels and title
+    ax.set_xlabel(_format_axis_label("m_t"), fontsize=12)
+    ax.set_ylabel(r"MPS $= \frac{\partial a_{t+1}}{\partial m_t}$", fontsize=12)
+    ax.set_title(r"A1-1: MPS (Marginal Propensity to Save)", fontsize=14, fontweight='bold')
+
+    # Add fixed variables info
+    fixed_str = ", ".join([f"{k}={v:.2f}" for k, v in fixed_values.items()])
+    ax.text(0.02, 0.98, f"Fixed: {fixed_str}", transform=ax.transAxes,
+            fontsize=9, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    ax.legend(loc='best', fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    # Apply manual axis limits if specified
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    plt.tight_layout()
+
+    # Save
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"MPS plot saved to: {save_path}")
+
+    # Log to wandb
+    if log_to_wandb and wandb.run:
+        wandb.log({
+            "decision_rules/A1_1_MPS": wandb.Image(fig),
+            "step": step
+        })
+
     return fig
 
 
@@ -851,7 +983,7 @@ def plot_B1_assets_to_assets(
         x_var="a_t",
         y_var="a_tp1",
         color_var=color_var,
-        use_log1p_x=False,
+        use_log1p_x=True,
         ref_lines=["y=0", "y=x"],
         title=r"B1: $a_t \rightarrow a_{t+1}$ (Assets Today to Tomorrow)",
         save_path=save_path,
@@ -885,12 +1017,13 @@ def plot_all_decision_rules(
     os.makedirs(save_dir, exist_ok=True)
 
     if plots is None:
-        plots = ["A1", "B1"]
+        plots = ["A1", "A1-1", "B1"]
 
     figures = {}
 
     plot_funcs = {
         "A1": plot_A1_resources_to_assets,
+        "A1-1": plot_A1_1_MPS,
         "B1": plot_B1_assets_to_assets,
     }
 
