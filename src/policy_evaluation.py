@@ -371,16 +371,21 @@ class PolicyEvaluator:
     """
     Evaluates policy network on synthetic grids for decision rule visualization.
 
-    Uses "Option A: Single-agent mode" - ignores aggregate effects and evaluates
-    the policy network with synthetic (1, 1) shaped inputs.
+    Uses a GE-aware evaluation approach: takes actual simulation data as the
+    "background" population and only modifies the target agent's inputs.
+    This preserves realistic aggregate features (sum_info_rep) while allowing
+    us to vary individual state variables.
 
     Three types of variables:
     1. x-axis: varies systematically on a grid (range from q5 to q95 of training data)
     2. color/panel: conditioning variable evaluated at 5 quantile levels (q5, q25, q50, q75, q95)
-    3. fixed: held constant at MEAN from training data
+    3. fixed: held constant at MEAN from training data (for non-featured variables like a_t, s_t)
 
     Usage:
-        evaluator = PolicyEvaluator(policy_net, normalizer, ranges, tax_params, device)
+        evaluator = PolicyEvaluator(
+            policy_net, normalizer, ranges, tax_params, n_agents, device,
+            reference_state={"money": money_tensor, "ability": ability_tensor}
+        )
         results = evaluator.evaluate_on_grid(
             x_var="m_t",
             color_var="v_t",
@@ -398,7 +403,9 @@ class PolicyEvaluator:
         normalizer,  # RunningPerAgentWelford
         ranges: HistoricalRanges,
         tax_params: Tensor,  # (Z,) or (B, Z) - tax parameters to use
-        device: str = "cpu"
+        n_agents: int,  # Number of agents (needed to construct proper input shape)
+        device: str = "cpu",
+        reference_state: Optional[Dict[str, Tensor]] = None  # Actual tensors from training
     ):
         """
         Initialize PolicyEvaluator.
@@ -408,18 +415,37 @@ class PolicyEvaluator:
             normalizer: RunningPerAgentWelford normalizer for inputs
             ranges: HistoricalRanges with collected statistics from training
             tax_params: Tax parameters tensor (Z,) - will be used for all evaluations
+            n_agents: Number of agents per batch (needed for input shape: 2*n_agents+2)
             device: Device to run evaluation on
+            reference_state: Dict with actual tensors from training simulation:
+                - "money": (B, A) money_disposable tensor
+                - "ability": (B, A) ability tensor
+                If provided, uses these as the background population for GE-aware evaluation.
+                If None, falls back to homogeneous population (may produce identical curves).
         """
         self.policy_net = policy_net
         self.normalizer = normalizer
         self.ranges = ranges
         self.device = device
+        self.n_agents = n_agents
 
         # Ensure tax_params is (Z,) shape
         tax_params = torch.as_tensor(tax_params, dtype=torch.float32, device=device)
         if tax_params.dim() == 2:
             tax_params = tax_params[0]  # Take first batch if (B, Z)
         self.tax_params = tax_params  # (Z,)
+
+        # Store reference state for GE-aware evaluation
+        # Use batch 0 from the reference state
+        if reference_state is not None:
+            self.ref_money = reference_state["money"][0:1].clone().to(device)  # (1, A)
+            self.ref_ability = reference_state["ability"][0:1].clone().to(device)  # (1, A)
+        else:
+            # Fallback: create homogeneous population at median values
+            m_ref = self.ranges.get_quantile_value("m_t", "q50")
+            v_ref = self.ranges.get_quantile_value("v_t", "q50")
+            self.ref_money = torch.full((1, n_agents), m_ref, dtype=torch.float32, device=device)
+            self.ref_ability = torch.full((1, n_agents), v_ref, dtype=torch.float32, device=device)
 
         # Put model in eval mode
         self.policy_net.eval()
@@ -493,9 +519,19 @@ class PolicyEvaluator:
         # Evaluate at each color level
         y_values = {}
 
+        # Debug: print color values being used
+        print(f"[DEBUG] evaluate_on_grid: color_var={color_var}")
+        print(f"[DEBUG] color_levels={color_levels}")
+        print(f"[DEBUG] color_values={color_values}")
+        print(f"[DEBUG] ref_ability sample: {self.ref_ability[0, :5].tolist()}")
+
         with torch.no_grad():
             for c_label, c_val in zip(color_levels, color_values):
                 y_arr = []
+
+                # Reset debug flag for each color level to see output for each quantile
+                if hasattr(self, '_debug_printed'):
+                    delattr(self, '_debug_printed')
 
                 for x_val in x_values:
                     # Build state dict
@@ -507,6 +543,9 @@ class PolicyEvaluator:
                     # Evaluate policy
                     output = self._evaluate_single_point(state_dict)
                     y_arr.append(output[y_var])
+
+                # Debug: print first and last y values for this color level
+                print(f"[DEBUG] {c_label} (v_t={c_val}): y[0]={y_arr[0]:.4f}, y[-1]={y_arr[-1]:.4f}")
 
                 y_values[c_label] = np.array(y_arr)
 
@@ -565,7 +604,11 @@ class PolicyEvaluator:
 
     def _evaluate_single_point(self, state_dict: Dict[str, float]) -> Dict[str, float]:
         """
-        Evaluate policy at a single state point using Option A (single-agent).
+        Evaluate policy at a single state point using GE-aware evaluation.
+
+        The model expects input shape (B, A, 2A+2) where A = n_agents.
+        We use actual simulation data as the background population and only
+        modify agent 0's inputs. This preserves realistic aggregate features.
 
         Args:
             state_dict: Dict with m_t, a_t, v_t, s_t values
@@ -573,38 +616,70 @@ class PolicyEvaluator:
         Returns:
             Dict with all decision variables: zeta_t, c_t, a_tp1, l_t, mu_t, da_t, I_bind
         """
-        # Extract values
+        # Extract target values for agent 0
         m_t = state_dict["m_t"]
         a_t = state_dict["a_t"]
         v_t = state_dict["v_t"]
-        # s_t is available but not directly used in single-agent policy input
+        # s_t is available but not directly used in policy input
 
-        # Build single-agent input (Option A)
-        # For single agent: B=1, A=1
-        # features shape: (1, 1, 2*1+2) = (1, 1, 4)
-        # The feature structure from build_inputs:
-        # [sum_info_rep (all money, all ability), money_self, ability_self]
-        # For A=1: [m_t, v_t, m_t, v_t] -> (1, 1, 4)
+        A = self.n_agents  # Number of agents
 
-        money = torch.tensor([[m_t]], dtype=torch.float32, device=self.device)  # (1, 1)
-        ability = torch.tensor([[v_t]], dtype=torch.float32, device=self.device)  # (1, 1)
+        # Build input matching training structure: (B, A, 2A+2)
+        # Use reference state as background, only modify agent 0
+        #
+        # Feature structure from build_inputs:
+        # - sum_info_rep: (B, A, 2A) - all agents' [money, ability] concatenated
+        # - money_self: (B, A, 1) - this agent's money
+        # - ability_self: (B, A, 1) - this agent's ability
 
-        # Build features manually for single-agent case
-        sum_info = torch.cat([money, ability], dim=1)  # (1, 2)
-        sum_info_rep = sum_info.unsqueeze(1)  # (1, 1, 2)
-        money_self = money.unsqueeze(-1)  # (1, 1, 1)
-        ability_self = ability.unsqueeze(-1)  # (1, 1, 1)
-        features = torch.cat([sum_info_rep, money_self, ability_self], dim=2)  # (1, 1, 4)
+        # Start from reference population (actual GE simulation data)
+        money = self.ref_money.clone()  # (1, A)
+        ability = self.ref_ability.clone()  # (1, A)
 
-        # Condition (tax params)
-        condi = self.tax_params.unsqueeze(0).unsqueeze(0)  # (1, 1, Z)
+        # Only modify agent 0's values to the target state
+        money[0, 0] = m_t
+        ability[0, 0] = v_t
+
+        # Build features using the same logic as build_inputs
+        # sum_info: concatenate all money and ability -> (B, 2A)
+        sum_info = torch.cat([money, ability], dim=1)  # (1, 2A)
+        sum_info_rep = sum_info.unsqueeze(1).expand(-1, A, -1)  # (1, A, 2A)
+
+        # Individual features
+        money_self = money.unsqueeze(-1)  # (1, A, 1)
+        ability_self = ability.unsqueeze(-1)  # (1, A, 1)
+
+        # Concatenate: (B, A, 2A+2)
+        features = torch.cat([sum_info_rep, money_self, ability_self], dim=2)  # (1, A, 2A+2)
+
+        # DEBUG: Check agent 0's features before normalization
+        # features[0, 0, :] = [sum_info (2A), money_self (1), ability_self (1)]
+        # Last two elements should be m_t and v_t
+        agent0_money_self = features[0, 0, -2].item()
+        agent0_ability_self = features[0, 0, -1].item()
+        # print(f"[DEBUG features] agent0: money_self={agent0_money_self:.2f} (expect {m_t:.2f}), ability_self={agent0_ability_self:.2f} (expect {v_t:.2f})")
+
+        # Condition (tax params): expand to (B, A, Z)
+        condi = self.tax_params.unsqueeze(0).unsqueeze(0).expand(1, A, -1)  # (1, A, Z)
 
         # Normalize features
         features_norm = self.normalizer.transform("state", features, update=False)
 
+        # DEBUG: Check agent 0's normalized features
+        agent0_norm_money = features_norm[0, 0, -2].item()
+        agent0_norm_ability = features_norm[0, 0, -1].item()
+        # print(f"[DEBUG norm] agent0: norm_money={agent0_norm_money:.4f}, norm_ability={agent0_norm_ability:.4f}")
+
         # Forward pass
-        zeta_raw = self.policy_net(features_norm, condi)  # (1, 1, 1)
-        zeta_t = float(torch.sigmoid(zeta_raw).squeeze().cpu())
+        zeta_raw = self.policy_net(features_norm, condi)  # (1, A, 1)
+
+        # Extract decision for agent 0 (the target agent with our specified state)
+        zeta_t = float(torch.sigmoid(zeta_raw[0, 0, 0]).cpu())
+
+        # DEBUG: one-time detailed print
+        if not hasattr(self, '_debug_printed'):
+            self._debug_printed = True
+            print(f"[DEBUG ONCE] v_t={v_t:.2f}, features[-1]={agent0_ability_self:.2f}, norm[-1]={agent0_norm_ability:.4f}, zeta={zeta_t:.4f}")
 
         # Compute derived quantities
         c_t = (1.0 - zeta_t) * m_t
