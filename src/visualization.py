@@ -626,19 +626,48 @@ def _add_reference_lines(ax, ref_lines: List[str], x_values: np.ndarray) -> None
             ax.plot(x_values, x_values, color='gray', linestyle='--', linewidth=1, alpha=0.7, label='y=x')
 
 
+def _add_log1p_validity_line(ax, threshold: float = 1.0) -> None:
+    """
+    Add a vertical line marking where log1p(x) ≈ x approximation breaks down.
+
+    For small x, log(1+x) ≈ x. Beyond the threshold, the transformation
+    compresses the scale significantly, affecting slope interpretation.
+
+    Args:
+        ax: matplotlib axis
+        threshold: x value where log1p(x) starts to differ meaningfully from x.
+                   Default is 1.0, where log(1+1) = 0.693 vs linear 1.0 (~30% diff).
+    """
+    log1p_threshold = np.log1p(threshold)
+    ax.axvline(x=log1p_threshold, color='gray', linestyle=':', linewidth=1.5, alpha=0.6)
+
+    # Add annotation
+    y_min, y_max = ax.get_ylim()
+    y_pos = y_min + 0.95 * (y_max - y_min)
+    ax.annotate(
+        f'x={threshold:.0f}',
+        xy=(log1p_threshold, y_pos),
+        xytext=(log1p_threshold + 0.1, y_pos),
+        fontsize=8,
+        color='gray',
+        verticalalignment='top'
+    )
+
+
 def plot_decision_rule(
     evaluator,  # PolicyEvaluator
     x_var: str,
     y_var: str,
     color_var: Optional[str] = None,
     fixed_vars: Optional[Dict] = None,
-    use_log1p_x: bool = False,
+    use_log1p_x: bool = True,
     ref_lines: Optional[List[str]] = None,
     title: Optional[str] = None,
     save_path: Optional[str] = None,
     log_to_wandb: bool = False,
     step: Optional[int] = None,
-    n_points: int = 100
+    n_points: int = 100,
+    debug: bool = False
 ) -> plt.Figure:
     """
     Plot a decision rule using synthetic grid evaluation.
@@ -672,7 +701,8 @@ def plot_decision_rule(
         y_var=y_var,
         color_var=color_var,
         fixed_vars=fixed_vars,
-        n_points=n_points
+        n_points=n_points,
+        debug=debug
     )
 
     x_values = results["x_values"]
@@ -710,6 +740,10 @@ def plot_decision_rule(
 
     # Add reference lines
     _add_reference_lines(ax, ref_lines, x_plot if not use_log1p_x else x_values)
+
+    # Add log1p validity line when using log transform
+    if use_log1p_x:
+        _add_log1p_validity_line(ax, threshold=1.0)
 
     # Labels and title
     ax.set_xlabel(x_label, fontsize=12)
@@ -754,7 +788,8 @@ def plot_A1_resources_to_assets(
     color_var: str = "v_t",
     save_path: Optional[str] = None,
     log_to_wandb: bool = False,
-    step: Optional[int] = None
+    step: Optional[int] = None,
+    debug: bool = False
 ) -> plt.Figure:
     """
     Plot A1: m_t → a_{t+1} (Resources to Next Assets)
@@ -767,6 +802,7 @@ def plot_A1_resources_to_assets(
         save_path: Where to save
         log_to_wandb: Log to wandb
         step: Training step
+        debug: If True, print debug information
 
     Returns:
         matplotlib Figure
@@ -776,12 +812,13 @@ def plot_A1_resources_to_assets(
         x_var="m_t",
         y_var="a_tp1",
         color_var=color_var,
-        use_log1p_x=True,
+        use_log1p_x=False,
         ref_lines=["y=0"],
         title=r"A1: $m_t \rightarrow a_{t+1}$ (Resources to Next Assets)",
         save_path=save_path,
         log_to_wandb=log_to_wandb,
-        step=step
+        step=step,
+        debug=debug
     )
     return fig
 
@@ -814,7 +851,7 @@ def plot_B1_assets_to_assets(
         x_var="a_t",
         y_var="a_tp1",
         color_var=color_var,
-        use_log1p_x=True,
+        use_log1p_x=False,
         ref_lines=["y=0", "y=x"],
         title=r"B1: $a_t \rightarrow a_{t+1}$ (Assets Today to Tomorrow)",
         save_path=save_path,

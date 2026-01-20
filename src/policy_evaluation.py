@@ -17,6 +17,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from src.utils.buildipnuts import build_inputs
+
 
 # =============================================================================
 # Historical Ranges Collection
@@ -456,7 +458,8 @@ class PolicyEvaluator:
         y_var: str,
         color_var: Optional[str] = None,
         fixed_vars: Optional[Dict[str, Union[str, float, bool]]] = None,
-        n_points: int = 100
+        n_points: int = 100,
+        debug: bool = False
     ) -> Dict[str, any]:
         """
         Evaluate policy on a synthetic grid.
@@ -519,35 +522,38 @@ class PolicyEvaluator:
         # Evaluate at each color level
         y_values = {}
 
-        # Debug: print color values being used
-        print(f"[DEBUG] evaluate_on_grid: color_var={color_var}")
-        print(f"[DEBUG] color_levels={color_levels}")
-        print(f"[DEBUG] color_values={color_values}")
-        print(f"[DEBUG] ref_ability sample: {self.ref_ability[0, :5].tolist()}")
-
         with torch.no_grad():
-            for c_label, c_val in zip(color_levels, color_values):
+            for c_idx, (c_label, c_val) in enumerate(zip(color_levels, color_values)):
                 y_arr = []
 
-                # Reset debug flag for each color level to see output for each quantile
-                if hasattr(self, '_debug_printed'):
-                    delattr(self, '_debug_printed')
+                # Debug: print info for first and last color level at middle x point
+                if debug and c_idx in [0, len(color_levels) - 1]:
+                    print(f"\n{'#'*60}")
+                    print(f"# Evaluating color_var={color_var}, level={c_label}, value={c_val}")
+                    print(f"# x_var={x_var}, range=[{x_values[0]:.4f}, {x_values[-1]:.4f}]")
+                    print(f"# Fixed vars: {fixed_values}")
+                    print(f"{'#'*60}")
 
-                for x_val in x_values:
+                for x_idx, x_val in enumerate(x_values):
                     # Build state dict
                     state_dict = dict(fixed_values)  # Start with fixed values
                     state_dict[x_var] = x_val
                     if color_var is not None:
                         state_dict[color_var] = c_val
 
+                    # Debug at middle point for first and last color level
+                    do_debug = debug and (c_idx in [0, len(color_levels) - 1]) and (x_idx == n_points // 2)
+                    debug_label = f"{c_label}, x={x_val:.2f}" if do_debug else ""
+
                     # Evaluate policy
-                    output = self._evaluate_single_point(state_dict)
+                    output = self._evaluate_single_point(state_dict, debug=do_debug, debug_label=debug_label)
                     y_arr.append(output[y_var])
 
-                # Debug: print first and last y values for this color level
-                print(f"[DEBUG] {c_label} (v_t={c_val}): y[0]={y_arr[0]:.4f}, y[-1]={y_arr[-1]:.4f}")
-
                 y_values[c_label] = np.array(y_arr)
+
+                # Debug: print summary for this color level
+                if debug:
+                    print(f"Color {c_label}: y_var={y_var} range=[{min(y_arr):.4f}, {max(y_arr):.4f}]")
 
         return {
             "x_values": x_values,
@@ -602,9 +608,19 @@ class PolicyEvaluator:
 
         return fixed
 
-    def _evaluate_single_point(self, state_dict: Dict[str, float]) -> Dict[str, float]:
+    def _evaluate_single_point(
+        self,
+        state_dict: Dict[str, float],
+        debug: bool = False,
+        debug_label: str = ""
+    ) -> Dict[str, float]:
         """
         Evaluate policy at a single state point using GE-aware evaluation.
+
+        IMPORTANT: This method now follows the exact same normalization flow as training:
+        1. Normalize ability and moneydisposable SEPARATELY using the normalizer
+        2. Call build_inputs() with the normalized values
+        3. Pass to policy network
 
         The model expects input shape (B, A, 2A+2) where A = n_agents.
         We use actual simulation data as the background population and only
@@ -612,6 +628,8 @@ class PolicyEvaluator:
 
         Args:
             state_dict: Dict with m_t, a_t, v_t, s_t values
+            debug: If True, print debug information
+            debug_label: Label for debug output
 
         Returns:
             Dict with all decision variables: zeta_t, c_t, a_tp1, l_t, mu_t, da_t, I_bind
@@ -622,64 +640,92 @@ class PolicyEvaluator:
         v_t = state_dict["v_t"]
         # s_t is available but not directly used in policy input
 
-        A = self.n_agents  # Number of agents
-
-        # Build input matching training structure: (B, A, 2A+2)
-        # Use reference state as background, only modify agent 0
-        #
-        # Feature structure from build_inputs:
-        # - sum_info_rep: (B, A, 2A) - all agents' [money, ability] concatenated
-        # - money_self: (B, A, 1) - this agent's money
-        # - ability_self: (B, A, 1) - this agent's ability
-
         # Start from reference population (actual GE simulation data)
-        money = self.ref_money.clone()  # (1, A)
+        # These are RAW (unnormalized) values
+        moneydisposable = self.ref_money.clone()  # (1, A)
         ability = self.ref_ability.clone()  # (1, A)
 
         # Only modify agent 0's values to the target state
-        money[0, 0] = m_t
+        moneydisposable[0, 0] = m_t
         ability[0, 0] = v_t
 
-        # Build features using the same logic as build_inputs
-        # sum_info: concatenate all money and ability -> (B, 2A)
-        sum_info = torch.cat([money, ability], dim=1)  # (1, 2A)
-        sum_info_rep = sum_info.unsqueeze(1).expand(-1, A, -1)  # (1, A, 2A)
+        # DEBUG: Log input before normalization
+        if debug:
+            print(f"\n{'='*60}")
+            print(f"DEBUG [{debug_label}]: Input state: m_t={m_t:.4f}, a_t={a_t:.4f}, v_t={v_t:.4f}")
+            print(f"DEBUG [{debug_label}]: Agent 0 RAW values:")
+            print(f"  - moneydisposable[0,0] = {moneydisposable[0, 0].item():.4f}")
+            print(f"  - ability[0,0] = {ability[0, 0].item():.4f}")
 
-        # Individual features
-        money_self = money.unsqueeze(-1)  # (1, A, 1)
-        ability_self = ability.unsqueeze(-1)  # (1, A, 1)
+        # ============================================================
+        # CRITICAL: Follow the EXACT same normalization flow as training
+        # (see src/environment.py lines 76-83)
+        # 1. Normalize ability separately
+        # 2. Normalize moneydisposable separately (note: typo "moneydisposalbe" in training)
+        # 3. Call build_inputs with normalized values
+        # ============================================================
 
-        # Concatenate: (B, A, 2A+2)
-        features = torch.cat([sum_info_rep, money_self, ability_self], dim=2)  # (1, A, 2A+2)
+        ability_normalized = self.normalizer.transform("ability", ability, update=False)
+        moneydisposable_normalized = self.normalizer.transform("moneydisposalbe", moneydisposable, update=False)
 
-        # DEBUG: Check agent 0's features before normalization
-        # features[0, 0, :] = [sum_info (2A), money_self (1), ability_self (1)]
-        # Last two elements should be m_t and v_t
-        agent0_money_self = features[0, 0, -2].item()
-        agent0_ability_self = features[0, 0, -1].item()
-        # print(f"[DEBUG features] agent0: money_self={agent0_money_self:.2f} (expect {m_t:.2f}), ability_self={agent0_ability_self:.2f} (expect {v_t:.2f})")
+        # DEBUG: Log normalized values
+        if debug:
+            print(f"DEBUG [{debug_label}]: Agent 0 NORMALIZED values:")
+            print(f"  - moneydisposable_norm[0,0] = {moneydisposable_normalized[0, 0].item():.4f}")
+            print(f"  - ability_norm[0,0] = {ability_normalized[0, 0].item():.4f}")
 
-        # Condition (tax params): expand to (B, A, Z)
-        condi = self.tax_params.unsqueeze(0).unsqueeze(0).expand(1, A, -1)  # (1, A, Z)
+            # Print normalizer statistics
+            if "ability" in self.normalizer._stats:
+                stats = self.normalizer._stats["ability"]
+                print(f"DEBUG [{debug_label}]: Ability normalizer stats:")
+                print(f"  - global_mode = {self.normalizer.global_mode}")
+                if self.normalizer.global_mode:
+                    print(f"  - mean = {stats.mean.item():.4f}")
+                    var = stats.M2 / torch.clamp(stats.count - 1.0, min=1.0)
+                    std = torch.sqrt(torch.clamp(var, min=0.0) + self.normalizer.eps)
+                    print(f"  - std = {std.item():.4f}")
+                else:
+                    print(f"  - mean[0] = {stats.mean[0].item():.4f}")
 
-        # Normalize features
-        features_norm = self.normalizer.transform("state", features, update=False)
+            if "moneydisposalbe" in self.normalizer._stats:
+                stats = self.normalizer._stats["moneydisposalbe"]
+                print(f"DEBUG [{debug_label}]: Moneydisposable normalizer stats:")
+                if self.normalizer.global_mode:
+                    print(f"  - mean = {stats.mean.item():.4f}")
+                    var = stats.M2 / torch.clamp(stats.count - 1.0, min=1.0)
+                    std = torch.sqrt(torch.clamp(var, min=0.0) + self.normalizer.eps)
+                    print(f"  - std = {std.item():.4f}")
+                else:
+                    print(f"  - mean[0] = {stats.mean[0].item():.4f}")
 
-        # DEBUG: Check agent 0's normalized features
-        agent0_norm_money = features_norm[0, 0, -2].item()
-        agent0_norm_ability = features_norm[0, 0, -1].item()
-        # print(f"[DEBUG norm] agent0: norm_money={agent0_norm_money:.4f}, norm_ability={agent0_norm_ability:.4f}")
+        # Build model inputs using the SAME function as training
+        features, condi = build_inputs(
+            moneydisposable=moneydisposable_normalized,
+            ability=ability_normalized,
+            tax_params=self.tax_params.unsqueeze(0),  # (1, Z)
+            device=self.device
+        )
+        # features: (1, A, 2A+2), condi: (1, A, Z)
 
-        # Forward pass
-        zeta_raw = self.policy_net(features_norm, condi)  # (1, A, 1)
+        # DEBUG: Log built features
+        if debug:
+            print(f"DEBUG [{debug_label}]: Built features shape: {features.shape}")
+            print(f"DEBUG [{debug_label}]: Agent 0 features:")
+            print(f"  - features[0,0,-2] (money_self) = {features[0, 0, -2].item():.4f}")
+            print(f"  - features[0,0,-1] (ability_self) = {features[0, 0, -1].item():.4f}")
+            print(f"  - features[0,0,:4] (sum_info first 4) = {features[0, 0, :4].cpu().numpy()}")
+
+        # Forward pass (features are already normalized)
+        zeta_raw = self.policy_net(features, condi)  # (1, A, 1)
+
+        # DEBUG: Log raw output
+        if debug:
+            print(f"DEBUG [{debug_label}]: Model output:")
+            print(f"  - zeta_raw[0,0,0] = {zeta_raw[0, 0, 0].item():.6f}")
+            print(f"  - sigmoid(zeta_raw) = {torch.sigmoid(zeta_raw[0, 0, 0]).item():.6f}")
 
         # Extract decision for agent 0 (the target agent with our specified state)
         zeta_t = float(torch.sigmoid(zeta_raw[0, 0, 0]).cpu())
-
-        # DEBUG: one-time detailed print
-        if not hasattr(self, '_debug_printed'):
-            self._debug_printed = True
-            print(f"[DEBUG ONCE] v_t={v_t:.2f}, features[-1]={agent0_ability_self:.2f}, norm[-1]={agent0_norm_ability:.4f}, zeta={zeta_t:.4f}")
 
         # Compute derived quantities
         c_t = (1.0 - zeta_t) * m_t
