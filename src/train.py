@@ -336,7 +336,8 @@ def train(config, run):
                     tax_params=main_state.tax_params[0],  # Use first batch's tax params
                     n_agents=config.training.agents,  # Pass n_agents for proper input shape
                     device=device,
-                    reference_state=reference_state  # Pass actual GE simulation data
+                    reference_state=reference_state,  # Pass actual GE simulation data
+                    config=config  # Pass config for computing m_t from a_t
                 )
                 plot_all_decision_rules(
                     evaluator=evaluator,

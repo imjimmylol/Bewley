@@ -407,7 +407,9 @@ class PolicyEvaluator:
         tax_params: Tensor,  # (Z,) or (B, Z) - tax parameters to use
         n_agents: int,  # Number of agents (needed to construct proper input shape)
         device: str = "cpu",
-        reference_state: Optional[Dict[str, Tensor]] = None  # Actual tensors from training
+        reference_state: Optional[Dict[str, Tensor]] = None,  # Actual tensors from training
+        # Economic parameters for computing m_t from a_t
+        config = None  # Full config object with tax_params and bewley_model
     ):
         """
         Initialize PolicyEvaluator.
@@ -424,12 +426,17 @@ class PolicyEvaluator:
                 - "ability": (B, A) ability tensor
                 If provided, uses these as the background population for GE-aware evaluation.
                 If None, falls back to homogeneous population (may produce identical curves).
+            config: Full configuration object containing:
+                - config.bewley_model.delta: depreciation rate
+                - config.tax_params.*: tax function parameters
+                Used for computing m_t from a_t when a_t is the x-axis variable.
         """
         self.policy_net = policy_net
         self.normalizer = normalizer
         self.ranges = ranges
         self.device = device
         self.n_agents = n_agents
+        self.config = config
 
         # Ensure tax_params is (Z,) shape
         tax_params = torch.as_tensor(tax_params, dtype=torch.float32, device=device)
@@ -451,6 +458,62 @@ class PolicyEvaluator:
 
         # Put model in eval mode
         self.policy_net.eval()
+
+    def _compute_m_from_a(
+        self,
+        a_t: float,
+        v_t: float,
+        l_t: float = 1.0,
+        wage: float = 1.0,
+        ret: float = 0.04
+    ) -> float:
+        """
+        Compute money disposable (m_t) from assets (a_t) using the economic model.
+
+        Formula (from environment.py):
+            ibt = wage * labor * ability + (1 - delta + ret) * savings
+            it, at = taxfunc(ibt, savings)
+            m_t = (ibt - it) + (savings - at)
+
+        Args:
+            a_t: Current assets/savings
+            v_t: Ability
+            l_t: Labor supply (default: 1.0, assuming full employment)
+            wage: Market wage (default: 1.0)
+            ret: Return on capital (default: 0.04)
+
+        Returns:
+            m_t: Money disposable
+        """
+        if self.config is None:
+            # Fallback: simple approximation m_t ≈ a_t * (1 + ret) + wage * v_t * l_t
+            return a_t * (1 + ret) + wage * v_t * l_t
+
+        # Get parameters from config
+        delta = self.config.bewley_model.delta
+        tax_income = self.config.tax_params.tax_income
+        income_tax_elasticity = self.config.tax_params.income_tax_elasticity
+        tax_saving = self.config.tax_params.tax_saving
+        saving_tax_elasticity = self.config.tax_params.saving_tax_elasticity
+
+        # Compute income before tax
+        ibt = wage * l_t * v_t + (1 - delta + ret) * a_t
+
+        # Apply tax function (from environment.py _taxfunc)
+        # it = ibt - (1 - tax_income) * (ibt^(1-income_tax_elasticity) / (1-income_tax_elasticity))
+        if abs(1 - income_tax_elasticity) > 1e-6:
+            it = ibt - (1 - tax_income) * (ibt ** (1 - income_tax_elasticity) / (1 - income_tax_elasticity))
+        else:
+            it = ibt * tax_income  # Linear approximation when elasticity ≈ 1
+
+        # at = abt - ((1-tax_saving)/(1-saving_tax_elasticity))
+        # Note: This seems to be a constant independent of abt in the original code
+        at = a_t - ((1 - tax_saving) / (1 - saving_tax_elasticity))
+
+        # Compute money disposable
+        m_t = (ibt - it) + (a_t - at)
+
+        return max(0.0, m_t)  # Ensure non-negative
 
     def evaluate_on_grid(
         self,
@@ -577,13 +640,17 @@ class PolicyEvaluator:
 
         Variables not on x-axis or color are fixed at their MEAN from training.
 
+        SPECIAL CASE: When x_var="a_t", m_t is NOT fixed but computed from a_t
+        using the economic model (m_t = f(a_t, v_t, l_t, wage, ret)).
+        This is marked by setting fixed["m_t"] = "COMPUTED_FROM_A".
+
         Args:
             x_var: Variable on x-axis (excluded)
             color_var: Variable for color (excluded)
             user_fixed: User-specified fixed values (overrides mean)
 
         Returns:
-            Dict of {var_name: float_value} for all fixed variables
+            Dict of {var_name: float_value or "COMPUTED_FROM_A"} for all fixed variables
         """
         # All state variables that need values
         all_state_vars = ["m_t", "a_t", "v_t", "s_t"]
@@ -594,6 +661,12 @@ class PolicyEvaluator:
             if var == x_var:
                 continue
             if var == color_var:
+                continue
+
+            # SPECIAL CASE: When a_t is x-axis, m_t should be computed from a_t
+            # (not fixed) to show history dependence
+            if var == "m_t" and x_var == "a_t":
+                fixed[var] = "COMPUTED_FROM_A"
                 continue
 
             # Check if user specified a value
@@ -610,7 +683,7 @@ class PolicyEvaluator:
 
     def _evaluate_single_point(
         self,
-        state_dict: Dict[str, float],
+        state_dict: Dict[str, Union[float, str]],
         debug: bool = False,
         debug_label: str = ""
     ) -> Dict[str, float]:
@@ -635,10 +708,17 @@ class PolicyEvaluator:
             Dict with all decision variables: zeta_t, c_t, a_tp1, l_t, mu_t, da_t, I_bind
         """
         # Extract target values for agent 0
-        m_t = state_dict["m_t"]
         a_t = state_dict["a_t"]
         v_t = state_dict["v_t"]
         # s_t is available but not directly used in policy input
+
+        # Handle m_t: either from state_dict or computed from a_t
+        m_t_spec = state_dict["m_t"]
+        if m_t_spec == "COMPUTED_FROM_A":
+            # Compute m_t from a_t using economic model
+            m_t = self._compute_m_from_a(a_t=a_t, v_t=v_t)
+        else:
+            m_t = float(m_t_spec)
 
         # Start from reference population (actual GE simulation data)
         # These are RAW (unnormalized) values
