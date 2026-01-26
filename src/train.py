@@ -178,7 +178,8 @@ def train(config, run):
     monitor = TrainingMonitor(config=config, normalizer=normalizer)
 
     # Initialize historical ranges for synthetic grid evaluation
-    historical_ranges = HistoricalRanges()
+    # Enable per-agent tracking so we can use agent-specific x-axis ranges
+    historical_ranges = HistoricalRanges(track_per_agent=True)
     
     # --- 3.5 Plot initial state distributions before training ---
     print("Plotting initial state distributions...")
@@ -285,7 +286,10 @@ def train(config, run):
         monitor.log_step(step, main_state, temp_state, loss)
 
         # ==== COLLECT HISTORICAL RANGES for synthetic grid evaluation ====
-        historical_ranges = collect_ranges_from_step(temp_state, main_state, historical_ranges)
+        # track_per_agent=True enables agent-specific x-axis ranges in visualization
+        historical_ranges = collect_ranges_from_step(
+            temp_state, main_state, historical_ranges, track_per_agent=True
+        )
 
         # ==== VISUALIZATION: Generate decision rule plots at checkpoint intervals ====
         if step % config.training.save_interval == 0:
@@ -337,7 +341,9 @@ def train(config, run):
                     n_agents=config.training.agents,  # Pass n_agents for proper input shape
                     device=device,
                     reference_state=reference_state,  # Pass actual GE simulation data
-                    config=config  # Pass config for computing m_t from a_t
+                    config=config,  # Pass config for computing m_t from a_t
+                    agent_idx=0,  # Focus on agent 0 for visualization
+                    use_agent_specific_range=True  # Use agent 0's explored range for x-axis
                 )
                 plot_all_decision_rules(
                     evaluator=evaluator,
