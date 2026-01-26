@@ -549,6 +549,12 @@ class PolicyEvaluator:
     rather than the global population range. This requires track_per_agent=True
     in HistoricalRanges.
 
+    Loss residual computation:
+    The evaluator can also compute FOC residuals at each grid point:
+    - FB loss: complementary slackness (zeta, mu)
+    - Labor FOC loss: labor supply condition
+    - Aux (Euler) loss: intertemporal condition (requires next-period consumption)
+
     Usage:
         evaluator = PolicyEvaluator(
             policy_net, normalizer, ranges, tax_params, n_agents, device,
@@ -560,7 +566,8 @@ class PolicyEvaluator:
             x_var="m_t",
             color_var="v_t",
             fixed_vars=["a_t", "s_t"],  # Will use mean values
-            n_points=100
+            n_points=100,
+            compute_losses=True  # Compute FOC residuals
         )
     """
 
@@ -728,7 +735,8 @@ class PolicyEvaluator:
         color_var: Optional[str] = None,
         fixed_vars: Optional[Dict[str, Union[str, float, bool]]] = None,
         n_points: int = 100,
-        debug: bool = False
+        debug: bool = False,
+        compute_losses: bool = False
     ) -> Dict[str, any]:
         """
         Evaluate policy on a synthetic grid.
@@ -742,6 +750,8 @@ class PolicyEvaluator:
                        If a variable is not in x_var, color_var, or fixed_vars,
                        it defaults to MEAN from training data.
             n_points: Number of grid points for x-axis
+            debug: If True, print debug information
+            compute_losses: If True, compute FOC loss residuals at each grid point
 
         Returns:
             Dict with:
@@ -754,6 +764,10 @@ class PolicyEvaluator:
                 - "fixed_values": dict of fixed variable values used
                 - "x_var": x variable name
                 - "y_var": y variable name
+                - "losses": (if compute_losses=True) dict with:
+                    - "fb_loss": dict mapping color_level -> np.ndarray
+                    - "labor_foc_loss": dict mapping color_level -> np.ndarray
+                    - "aux_loss": dict mapping color_level -> np.ndarray
         """
         # Validate configuration
         condition_vars_for_validation = {}
@@ -812,9 +826,19 @@ class PolicyEvaluator:
         # Evaluate at each color level
         y_values = {}
 
+        # Loss tracking (if requested)
+        losses = {
+            "fb_loss": {},
+            "labor_foc_loss": {},
+            "aux_loss": {}
+        } if compute_losses else None
+
         with torch.no_grad():
             for c_idx, (c_label, c_val) in enumerate(zip(color_levels, color_values)):
                 y_arr = []
+                fb_arr = [] if compute_losses else None
+                labor_arr = [] if compute_losses else None
+                aux_arr = [] if compute_losses else None
 
                 # Debug: print info for first and last color level at middle x point
                 if debug and c_idx in [0, len(color_levels) - 1]:
@@ -835,17 +859,37 @@ class PolicyEvaluator:
                     do_debug = debug and (c_idx in [0, len(color_levels) - 1]) and (x_idx == n_points // 2)
                     debug_label = f"{c_label}, x={x_val:.2f}" if do_debug else ""
 
-                    # Evaluate policy
-                    output = self._evaluate_single_point(state_dict, debug=do_debug, debug_label=debug_label)
+                    # Evaluate policy (with loss computation if requested)
+                    output = self._evaluate_single_point(
+                        state_dict,
+                        debug=do_debug,
+                        debug_label=debug_label,
+                        compute_losses=compute_losses
+                    )
                     y_arr.append(output[y_var])
 
+                    # Collect loss values if computing losses
+                    if compute_losses:
+                        fb_arr.append(output.get("fb_loss", 0.0))
+                        labor_arr.append(output.get("labor_foc_loss", 0.0))
+                        aux_arr.append(output.get("aux_loss", 0.0))
+
                 y_values[c_label] = np.array(y_arr)
+
+                # Store loss arrays for this color level
+                if compute_losses:
+                    losses["fb_loss"][c_label] = np.array(fb_arr)
+                    losses["labor_foc_loss"][c_label] = np.array(labor_arr)
+                    losses["aux_loss"][c_label] = np.array(aux_arr)
 
                 # Debug: print summary for this color level
                 if debug:
                     print(f"Color {c_label}: y_var={y_var} range=[{min(y_arr):.4f}, {max(y_arr):.4f}]")
+                    if compute_losses:
+                        print(f"  FB loss range: [{min(fb_arr):.6f}, {max(fb_arr):.6f}]")
+                        print(f"  Labor FOC loss range: [{min(labor_arr):.6f}, {max(labor_arr):.6f}]")
 
-        return {
+        result = {
             "x_values": x_values,
             "y_values": y_values,
             "color_var": color_var,
@@ -855,6 +899,11 @@ class PolicyEvaluator:
             "x_var": x_var,
             "y_var": y_var,
         }
+
+        if compute_losses:
+            result["losses"] = losses
+
+        return result
 
     def _resolve_fixed_vars(
         self,
@@ -922,7 +971,8 @@ class PolicyEvaluator:
         self,
         state_dict: Dict[str, Union[float, str]],
         debug: bool = False,
-        debug_label: str = ""
+        debug_label: str = "",
+        compute_losses: bool = False
     ) -> Dict[str, float]:
         """
         Evaluate policy at a single state point using GE-aware evaluation.
@@ -940,9 +990,11 @@ class PolicyEvaluator:
             state_dict: Dict with m_t, a_t, v_t, s_t values
             debug: If True, print debug information
             debug_label: Label for debug output
+            compute_losses: If True, also compute and return FOC loss residuals
 
         Returns:
             Dict with all decision variables: zeta_t, c_t, a_tp1, l_t, mu_t, da_t, I_bind
+            If compute_losses=True, also includes: fb_loss, labor_foc_loss, aux_loss
         """
         # Extract target values for agent 0
         a_t = state_dict["a_t"]
@@ -1033,16 +1085,29 @@ class PolicyEvaluator:
             print(f"  - features[0,0,:4] (sum_info first 4) = {features[0, 0, :4].cpu().numpy()}")
 
         # Forward pass (features are already normalized)
-        zeta_raw = self.policy_net(features, condi)  # (1, A, 1)
+        # Policy network outputs 3 values: savings_ratio, mu, labor
+        import torch.nn.functional as F
+        out = self.policy_net(features, condi)  # (1, A, 3)
+
+        # Extract all 3 outputs using same activations as environment.py
+        acts = [torch.sigmoid, lambda x: F.softplus(x) + 1e-6, torch.sigmoid]
+        zeta_raw, mu_raw, labor_raw = [acts[i](out[..., i]) for i in range(out.shape[-1])]
+
+        # Apply same bounds as training (labor and savings in [0.01, 0.99])
+        labor_raw = labor_raw * 0.98 + 0.01
+        zeta_raw = zeta_raw * 0.98 + 0.01
 
         # DEBUG: Log raw output
         if debug:
             print(f"DEBUG [{debug_label}]: Model output:")
-            print(f"  - zeta_raw[0,0,0] = {zeta_raw[0, 0, 0].item():.6f}")
-            print(f"  - sigmoid(zeta_raw) = {torch.sigmoid(zeta_raw[0, 0, 0]).item():.6f}")
+            print(f"  - zeta[0,0] = {zeta_raw[0, 0].item():.6f}")
+            print(f"  - mu[0,0] = {mu_raw[0, 0].item():.6f}")
+            print(f"  - labor[0,0] = {labor_raw[0, 0].item():.6f}")
 
-        # Extract decision for agent 0 (the target agent with our specified state)
-        zeta_t = float(torch.sigmoid(zeta_raw[0, 0, 0]).cpu())
+        # Extract decisions for agent 0 (the target agent with our specified state)
+        zeta_t = float(zeta_raw[0, 0].cpu())
+        mu_t = float(mu_raw[0, 0].cpu())
+        l_t = float(labor_raw[0, 0].cpu())
 
         # Compute derived quantities
         c_t = (1.0 - zeta_t) * m_t
@@ -1050,11 +1115,7 @@ class PolicyEvaluator:
         da_t = a_tp1 - a_t
         I_bind = 1.0 if a_tp1 < 1e-6 else 0.0
 
-        # Placeholders for variables that need additional models
-        l_t = 0.0  # Would need labor supply model
-        mu_t = 0.0  # Would need complementarity computation
-
-        return {
+        result = {
             "zeta_t": zeta_t,
             "c_t": c_t,
             "a_tp1": a_tp1,
@@ -1063,3 +1124,86 @@ class PolicyEvaluator:
             "da_t": da_t,
             "I_bind": I_bind,
         }
+
+        # Compute FOC loss residuals if requested
+        if compute_losses:
+            # Compute market equilibrium prices (simplified single-agent version)
+            # In practice, these should be based on the reference population
+            if self.config is not None:
+                A_prod = self.config.bewley_model.A
+                alpha = self.config.bewley_model.alpha
+                delta = self.config.bewley_model.delta
+
+                # Use reference population for aggregate computation
+                labor_eff_agg = max(0.01, l_t * v_t)
+                savings_agg = max(0.01, a_t)
+                ratio = savings_agg / labor_eff_agg
+
+                wage = A_prod * (1 - alpha) * (ratio ** alpha)
+                ret = A_prod * alpha * (ratio ** (alpha - 1))
+
+                # Compute income before tax
+                ibt = wage * l_t * v_t + (1 - delta + ret) * a_t
+            else:
+                # Fallback values
+                wage = 1.0
+                ret = 0.04
+                ibt = wage * l_t * v_t + (1.04) * a_t
+
+            # ============================================================
+            # FB Loss: Complementary slackness (zeta, mu)
+            # From calloss.py: (r1 + r2 - sqrt(r1^2 + r2^2))^2
+            # where r1 = savings_ratio, r2 = (1 - mu)
+            # ============================================================
+            r1 = zeta_t
+            r2 = 1.0 - mu_t
+            fb_loss = (r1 + r2 - np.sqrt(r1**2 + r2**2))**2
+
+            # ============================================================
+            # Labor FOC Loss
+            # From calloss.py:
+            # -labor^gamma + (c^(-theta) / (1+tau_s)) * [wage * ability * (1-(1-tau_i)*ibt^(-eps_i))]
+            # ============================================================
+            if self.config is not None:
+                theta = self.config.bewley_model.theta
+                gamma = self.config.bewley_model.gamma
+                tax_income = self.config.tax_params.tax_income
+                tax_saving = self.config.tax_params.tax_saving
+                income_tax_elasticity = self.config.tax_params.income_tax_elasticity
+            else:
+                # Fallback values
+                theta = 1.0
+                gamma = 2.0
+                tax_income = 0.3
+                tax_saving = 0.0
+                income_tax_elasticity = 0.1
+
+            eps = 1e-8
+            labor_term = -(max(l_t, eps) ** gamma)
+            cons_term = (max(c_t, eps) ** (-theta)) / (1.0 + tax_saving)
+            ibt_term = max(ibt, eps) ** (-income_tax_elasticity)
+            tax_factor = (1.0 - tax_income) * ibt_term
+            prod_term = wage * v_t * tax_factor
+            labor_foc_residual = labor_term + cons_term * prod_term
+            labor_foc_loss = labor_foc_residual ** 2
+
+            # ============================================================
+            # Aux (Euler) Loss - simplified version
+            # Full version needs next-period consumption from both branches
+            # For now, use a proxy based on current period variables
+            # ============================================================
+            # Simplified: check if mu is consistent with Euler equation structure
+            # mu should be positive when borrowing constraint binds (a_tp1 ≈ 0)
+            # and near zero when not binding
+            aux_loss = 0.0  # Placeholder - would need next period simulation
+
+            result["fb_loss"] = fb_loss
+            result["labor_foc_loss"] = labor_foc_loss
+            result["aux_loss"] = aux_loss
+
+            # Also store intermediate economic variables for debugging
+            result["wage"] = wage
+            result["ret"] = ret
+            result["ibt"] = ibt
+
+        return result

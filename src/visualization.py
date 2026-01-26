@@ -810,7 +810,9 @@ def plot_A1_resources_to_assets(
     step: Optional[int] = None,
     debug: bool = False,
     xlim: Optional[tuple] = None,
-    ylim: Optional[tuple] = None
+    ylim: Optional[tuple] = None,
+    show_losses: bool = False,
+    n_points: int = 100
 ) -> plt.Figure:
     """
     Plot A1: m_t → a_{t+1} (Resources to Next Assets)
@@ -826,25 +828,238 @@ def plot_A1_resources_to_assets(
         debug: If True, print debug information
         xlim: Optional tuple (xmin, xmax) for manual x-axis clipping (in original scale)
         ylim: Optional tuple (ymin, ymax) for manual y-axis clipping
+        show_losses: If True, add subplots showing FOC loss residuals
+        n_points: Number of grid points for evaluation
 
     Returns:
         matplotlib Figure
     """
-    fig = plot_decision_rule(
+    if not show_losses:
+        # Original behavior: single plot
+        fig = plot_decision_rule(
+            evaluator=evaluator,
+            x_var="m_t",
+            y_var="a_tp1",
+            color_var=color_var,
+            use_log1p_x=True,
+            ref_lines=["y=0"],
+            title=r"A1: $m_t \rightarrow a_{t+1}$ (Resources to Next Assets)",
+            save_path=save_path,
+            log_to_wandb=log_to_wandb,
+            step=step,
+            debug=debug,
+            xlim=xlim,
+            ylim=ylim,
+            n_points=n_points
+        )
+        return fig
+
+    # With losses: create figure with 4 subplots sharing x-axis
+    fig = plot_decision_rule_with_losses(
         evaluator=evaluator,
         x_var="m_t",
         y_var="a_tp1",
         color_var=color_var,
         use_log1p_x=True,
-        ref_lines=["y=0"],
-        title=r"A1: $m_t \rightarrow a_{t+1}$ (Resources to Next Assets)",
+        title=r"A1: $m_t \rightarrow a_{t+1}$ with FOC Losses",
         save_path=save_path,
         log_to_wandb=log_to_wandb,
         step=step,
         debug=debug,
         xlim=xlim,
-        ylim=ylim
+        ylim=ylim,
+        n_points=n_points
     )
+    return fig
+
+
+def plot_decision_rule_with_losses(
+    evaluator,
+    x_var: str,
+    y_var: str,
+    color_var: Optional[str] = None,
+    fixed_vars: Optional[Dict] = None,
+    use_log1p_x: bool = True,
+    title: Optional[str] = None,
+    save_path: Optional[str] = None,
+    log_to_wandb: bool = False,
+    step: Optional[int] = None,
+    n_points: int = 100,
+    debug: bool = False,
+    xlim: Optional[tuple] = None,
+    ylim: Optional[tuple] = None
+) -> plt.Figure:
+    """
+    Plot decision rule with FOC loss subplots sharing x-axis.
+
+    Creates a 4-row figure:
+    - Row 1: Main decision rule (e.g., m_t → a_{t+1})
+    - Row 2: FB Loss (complementary slackness)
+    - Row 3: Labor FOC Loss
+    - Row 4: Aux Loss (Euler equation)
+
+    Args:
+        evaluator: PolicyEvaluator instance
+        x_var: Variable for x-axis (e.g., "m_t", "a_t")
+        y_var: Variable for y-axis (e.g., "c_t", "a_tp1")
+        color_var: Optional variable for color conditioning
+        fixed_vars: Optional dict of fixed variables
+        use_log1p_x: If True, apply log1p transform to x-axis
+        title: Optional custom title
+        save_path: Where to save the plot
+        log_to_wandb: If True, log to wandb
+        step: Training step for wandb
+        n_points: Number of grid points
+        debug: If True, print debug information
+        xlim: Optional x-axis limits (in original scale)
+        ylim: Optional y-axis limits for main plot
+
+    Returns:
+        matplotlib Figure
+    """
+    # Evaluate on grid with loss computation
+    results = evaluator.evaluate_on_grid(
+        x_var=x_var,
+        y_var=y_var,
+        color_var=color_var,
+        fixed_vars=fixed_vars,
+        n_points=n_points,
+        debug=debug,
+        compute_losses=True
+    )
+
+    x_values = results["x_values"]
+    y_values = results["y_values"]
+    color_levels = results["color_levels"]
+    color_values = results["color_values"]
+    fixed_values = results["fixed_values"]
+    losses = results["losses"]
+
+    # Transform x if needed
+    if use_log1p_x:
+        x_plot = np.log1p(x_values)
+        x_label = f"log(1 + {_format_axis_label(x_var)})"
+    else:
+        x_plot = x_values
+        x_label = _format_axis_label(x_var)
+
+    # Create figure with 4 subplots sharing x-axis
+    fig, axes = plt.subplots(4, 1, figsize=(10, 14), sharex=True,
+                              gridspec_kw={'height_ratios': [3, 1, 1, 1]})
+
+    # ================================================================
+    # Subplot 1: Main decision rule
+    # ================================================================
+    ax_main = axes[0]
+    for c_label, c_val in zip(color_levels, color_values):
+        y_arr = y_values[c_label]
+        color = QUANTILE_COLORS.get(c_label, "#333333")
+
+        # Format legend label
+        if color_var and c_val is not None:
+            if color_var == "s_t":
+                legend_label = c_label
+            else:
+                legend_label = f"{color_var}={c_val:.2f} ({c_label})"
+        else:
+            legend_label = "Policy"
+
+        ax_main.plot(x_plot, y_arr, color=color, linewidth=2, label=legend_label)
+
+    ax_main.set_ylabel(_format_axis_label(y_var), fontsize=12)
+    if title:
+        ax_main.set_title(title, fontsize=14, fontweight='bold')
+    ax_main.legend(loc='best', fontsize=9)
+    ax_main.grid(True, alpha=0.3)
+
+    # Add fixed variables info
+    fixed_str = ", ".join([
+        f"{k}={v:.2f}" if isinstance(v, (int, float)) else f"{k}={v}"
+        for k, v in fixed_values.items()
+    ])
+    ax_main.text(0.02, 0.98, f"Fixed: {fixed_str}", transform=ax_main.transAxes,
+                 fontsize=8, verticalalignment='top',
+                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    if ylim is not None:
+        ax_main.set_ylim(ylim)
+
+    # ================================================================
+    # Subplot 2: FB Loss
+    # ================================================================
+    ax_fb = axes[1]
+    for c_label in color_levels:
+        fb_arr = losses["fb_loss"][c_label]
+        # Add small epsilon to handle zeros in log scale
+        fb_arr_plot = np.maximum(fb_arr, 1e-10)
+        color = QUANTILE_COLORS.get(c_label, "#333333")
+        ax_fb.plot(x_plot, fb_arr_plot, color=color, linewidth=1.5, alpha=0.8)
+
+    ax_fb.set_ylabel("FB Loss", fontsize=10)
+    ax_fb.set_yscale('log')
+    ax_fb.grid(True, alpha=0.3)
+    ax_fb.set_title("FB Loss (Complementary Slackness)", fontsize=10)
+
+    # ================================================================
+    # Subplot 3: Labor FOC Loss
+    # ================================================================
+    ax_labor = axes[2]
+    for c_label in color_levels:
+        labor_arr = losses["labor_foc_loss"][c_label]
+        # Add small epsilon to handle zeros in log scale
+        labor_arr_plot = np.maximum(labor_arr, 1e-10)
+        color = QUANTILE_COLORS.get(c_label, "#333333")
+        ax_labor.plot(x_plot, labor_arr_plot, color=color, linewidth=1.5, alpha=0.8)
+
+    ax_labor.set_ylabel("Labor FOC", fontsize=10)
+    ax_labor.set_yscale('log')
+    ax_labor.grid(True, alpha=0.3)
+    ax_labor.set_title("Labor FOC Loss", fontsize=10)
+
+    # ================================================================
+    # Subplot 4: Aux Loss (Euler)
+    # ================================================================
+    ax_aux = axes[3]
+    has_nonzero_aux = False
+    for c_label in color_levels:
+        aux_arr = losses["aux_loss"][c_label]
+        # Check if aux loss has any non-zero values
+        if np.any(aux_arr > 1e-10):
+            has_nonzero_aux = True
+        aux_arr_plot = np.maximum(aux_arr, 1e-10)
+        color = QUANTILE_COLORS.get(c_label, "#333333")
+        ax_aux.plot(x_plot, aux_arr_plot, color=color, linewidth=1.5, alpha=0.8)
+
+    ax_aux.set_ylabel("Aux Loss", fontsize=10)
+    ax_aux.set_xlabel(x_label, fontsize=12)
+    ax_aux.grid(True, alpha=0.3)
+    if has_nonzero_aux:
+        ax_aux.set_yscale('log')
+        ax_aux.set_title("Aux Loss (Euler Equation)", fontsize=10)
+    else:
+        ax_aux.set_title("Aux Loss (Euler Equation) - Not Computed", fontsize=10)
+
+    # Apply x-axis limits if specified
+    if xlim is not None:
+        if use_log1p_x:
+            ax_aux.set_xlim(np.log1p(xlim[0]), np.log1p(xlim[1]))
+        else:
+            ax_aux.set_xlim(xlim)
+
+    plt.tight_layout()
+
+    # Save
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Decision rule with losses plot saved to: {save_path}")
+
+    # Log to wandb
+    if log_to_wandb and wandb.run:
+        wandb.log({
+            f"decision_rules/{x_var}_to_{y_var}_with_losses": wandb.Image(fig),
+            "step": step
+        })
+
     return fig
 
 
@@ -857,7 +1072,8 @@ def plot_A1_1_MPS(
     debug: bool = False,
     xlim: Optional[tuple] = None,
     ylim: Optional[tuple] = None,
-    n_points: int = 100
+    n_points: int = 100,
+    show_losses: bool = False
 ) -> plt.Figure:
     """
     Plot A1-1: MPS (Marginal Propensity to Save) - the slope of m_t → a_{t+1}.
@@ -875,6 +1091,7 @@ def plot_A1_1_MPS(
         xlim: Optional tuple (xmin, xmax) for manual x-axis clipping
         ylim: Optional tuple (ymin, ymax) for manual y-axis clipping
         n_points: Number of grid points for evaluation
+        show_losses: If True, add subplots showing FOC loss residuals
 
     Returns:
         matplotlib Figure
@@ -885,7 +1102,8 @@ def plot_A1_1_MPS(
         y_var="a_tp1",
         color_var=color_var,
         n_points=n_points,
-        debug=debug
+        debug=debug,
+        compute_losses=show_losses
     )
 
     x_values = results["x_values"]
@@ -893,18 +1111,26 @@ def plot_A1_1_MPS(
     color_levels = results["color_levels"]
     color_values = results["color_values"]
     fixed_values = results["fixed_values"]
+    losses = results.get("losses", None) if show_losses else None
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 7))
-
-    # Compute and plot MPS (slope) for each color level
-    for c_label, c_val in zip(color_levels, color_values):
+    # Compute MPS for each color level
+    mps_values = {}
+    for c_label in color_levels:
         y_arr = y_values[c_label]
-        color = QUANTILE_COLORS.get(c_label, "#333333")
+        mps_values[c_label] = np.gradient(y_arr, x_values)
 
-        # Compute MPS as finite difference: d(a_tp1)/d(m_t)
-        # Use central differences for interior points
-        mps = np.gradient(y_arr, x_values)
+    # Create figure - with or without loss subplots
+    if show_losses and losses is not None:
+        fig, axes = plt.subplots(4, 1, figsize=(10, 14), sharex=True,
+                                  gridspec_kw={'height_ratios': [3, 1, 1, 1]})
+        ax = axes[0]
+    else:
+        fig, ax = plt.subplots(figsize=(10, 7))
+
+    # Plot MPS for each color level
+    for c_label, c_val in zip(color_levels, color_values):
+        mps = mps_values[c_label]
+        color = QUANTILE_COLORS.get(c_label, "#333333")
 
         # Format legend label
         if color_var and c_val is not None:
@@ -922,7 +1148,8 @@ def plot_A1_1_MPS(
     ax.axhline(y=1, color='gray', linestyle=':', linewidth=1, alpha=0.7, label='MPS=1')
 
     # Labels and title
-    ax.set_xlabel(_format_axis_label("m_t"), fontsize=12)
+    if not show_losses:
+        ax.set_xlabel(_format_axis_label("m_t"), fontsize=12)
     ax.set_ylabel(r"MPS $= \frac{\partial a_{t+1}}{\partial m_t}$", fontsize=12)
     ax.set_title(r"A1-1: MPS (Marginal Propensity to Save)", fontsize=14, fontweight='bold')
 
@@ -943,6 +1170,51 @@ def plot_A1_1_MPS(
         ax.set_xlim(xlim)
     if ylim is not None:
         ax.set_ylim(ylim)
+
+    # Add loss subplots if requested
+    if show_losses and losses is not None:
+        # FB Loss subplot
+        ax_fb = axes[1]
+        for c_label in color_levels:
+            fb_arr = losses["fb_loss"][c_label]
+            fb_arr_plot = np.maximum(fb_arr, 1e-10)
+            color = QUANTILE_COLORS.get(c_label, "#333333")
+            ax_fb.plot(x_values, fb_arr_plot, color=color, linewidth=1.5, alpha=0.8)
+        ax_fb.set_ylabel("FB Loss", fontsize=10)
+        ax_fb.set_yscale('log')
+        ax_fb.grid(True, alpha=0.3)
+        ax_fb.set_title("FB Loss (Complementary Slackness)", fontsize=10)
+
+        # Labor FOC Loss subplot
+        ax_labor = axes[2]
+        for c_label in color_levels:
+            labor_arr = losses["labor_foc_loss"][c_label]
+            labor_arr_plot = np.maximum(labor_arr, 1e-10)
+            color = QUANTILE_COLORS.get(c_label, "#333333")
+            ax_labor.plot(x_values, labor_arr_plot, color=color, linewidth=1.5, alpha=0.8)
+        ax_labor.set_ylabel("Labor FOC", fontsize=10)
+        ax_labor.set_yscale('log')
+        ax_labor.grid(True, alpha=0.3)
+        ax_labor.set_title("Labor FOC Loss", fontsize=10)
+
+        # Aux Loss subplot
+        ax_aux = axes[3]
+        has_nonzero_aux = False
+        for c_label in color_levels:
+            aux_arr = losses["aux_loss"][c_label]
+            if np.any(aux_arr > 1e-10):
+                has_nonzero_aux = True
+            aux_arr_plot = np.maximum(aux_arr, 1e-10)
+            color = QUANTILE_COLORS.get(c_label, "#333333")
+            ax_aux.plot(x_values, aux_arr_plot, color=color, linewidth=1.5, alpha=0.8)
+        ax_aux.set_ylabel("Aux Loss", fontsize=10)
+        ax_aux.set_xlabel(_format_axis_label("m_t"), fontsize=12)
+        ax_aux.grid(True, alpha=0.3)
+        if has_nonzero_aux:
+            ax_aux.set_yscale('log')
+            ax_aux.set_title("Aux Loss (Euler Equation)", fontsize=10)
+        else:
+            ax_aux.set_title("Aux Loss (Euler Equation) - Not Computed", fontsize=10)
 
     plt.tight_layout()
 
@@ -966,7 +1238,12 @@ def plot_B1_assets_to_assets(
     color_var: str = "v_t",
     save_path: Optional[str] = None,
     log_to_wandb: bool = False,
-    step: Optional[int] = None
+    step: Optional[int] = None,
+    debug: bool = False,
+    xlim: Optional[tuple] = None,
+    ylim: Optional[tuple] = None,
+    show_losses: bool = False,
+    n_points: int = 100
 ) -> plt.Figure:
     """
     Plot B1: a_t → a_{t+1} (Assets Today to Assets Tomorrow)
@@ -980,21 +1257,50 @@ def plot_B1_assets_to_assets(
         save_path: Where to save
         log_to_wandb: Log to wandb
         step: Training step
+        debug: If True, print debug information
+        xlim: Optional tuple (xmin, xmax) for manual x-axis clipping
+        ylim: Optional tuple (ymin, ymax) for manual y-axis clipping
+        show_losses: If True, add subplots showing FOC loss residuals
+        n_points: Number of grid points for evaluation
 
     Returns:
         matplotlib Figure
     """
-    fig = plot_decision_rule(
+    if not show_losses:
+        # Original behavior: single plot
+        fig = plot_decision_rule(
+            evaluator=evaluator,
+            x_var="a_t",
+            y_var="a_tp1",
+            color_var=color_var,
+            use_log1p_x=True,
+            ref_lines=["y=0", "y=x"],
+            title=r"B1: $a_t \rightarrow a_{t+1}$ (Assets Today to Tomorrow)",
+            save_path=save_path,
+            log_to_wandb=log_to_wandb,
+            step=step,
+            debug=debug,
+            xlim=xlim,
+            ylim=ylim,
+            n_points=n_points
+        )
+        return fig
+
+    # With losses: create figure with 4 subplots sharing x-axis
+    fig = plot_decision_rule_with_losses(
         evaluator=evaluator,
         x_var="a_t",
         y_var="a_tp1",
         color_var=color_var,
         use_log1p_x=True,
-        ref_lines=["y=0", "y=x"],
-        title=r"B1: $a_t \rightarrow a_{t+1}$ (Assets Today to Tomorrow)",
+        title=r"B1: $a_t \rightarrow a_{t+1}$ with FOC Losses",
         save_path=save_path,
         log_to_wandb=log_to_wandb,
-        step=step
+        step=step,
+        debug=debug,
+        xlim=xlim,
+        ylim=ylim,
+        n_points=n_points
     )
     return fig
 
@@ -1004,7 +1310,9 @@ def plot_all_decision_rules(
     save_dir: str,
     log_to_wandb: bool = False,
     step: Optional[int] = None,
-    plots: Optional[List[str]] = None
+    plots: Optional[List[str]] = None,
+    show_losses: bool = False,
+    n_points: int = 100
 ) -> Dict[str, plt.Figure]:
     """
     Generate all (or selected) decision rule plots.
@@ -1014,7 +1322,9 @@ def plot_all_decision_rules(
         save_dir: Directory to save plots
         log_to_wandb: Log to wandb
         step: Training step
-        plots: List of plot IDs to generate (default: ["A1", "B1"])
+        plots: List of plot IDs to generate (default: ["A1", "A1-1", "B1"])
+        show_losses: If True, add subplots showing FOC loss residuals
+        n_points: Number of grid points for evaluation
 
     Returns:
         Dict mapping plot ID to Figure
@@ -1035,12 +1345,15 @@ def plot_all_decision_rules(
 
     for plot_id in plots:
         if plot_id in plot_funcs:
-            save_path = os.path.join(save_dir, f"fig_{plot_id}_step_{step}.png") if step else os.path.join(save_dir, f"fig_{plot_id}.png")
+            suffix = "_with_losses" if show_losses else ""
+            save_path = os.path.join(save_dir, f"fig_{plot_id}{suffix}_step_{step}.png") if step else os.path.join(save_dir, f"fig_{plot_id}{suffix}.png")
             fig = plot_funcs[plot_id](
                 evaluator=evaluator,
                 save_path=save_path,
                 log_to_wandb=log_to_wandb,
-                step=step
+                step=step,
+                show_losses=show_losses,
+                n_points=n_points
             )
             figures[plot_id] = fig
             plt.close(fig)
