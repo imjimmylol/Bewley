@@ -763,8 +763,11 @@ def plot_decision_rule(
             title_str += f" (color by {color_var})"
         ax.set_title(title_str, fontsize=14, fontweight='bold')
 
-    # Add fixed variables info
-    fixed_str = ", ".join([f"{k}={v:.2f}" for k, v in fixed_values.items()])
+    # Add fixed variables info (handle string values like "COMPUTED_FROM_A")
+    fixed_str = ", ".join([
+        f"{k}={v:.2f}" if isinstance(v, (int, float)) else f"{k}={v}"
+        for k, v in fixed_values.items()
+    ])
     ax.text(0.02, 0.98, f"Fixed: {fixed_str}", transform=ax.transAxes,
             fontsize=9, verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
@@ -923,8 +926,11 @@ def plot_A1_1_MPS(
     ax.set_ylabel(r"MPS $= \frac{\partial a_{t+1}}{\partial m_t}$", fontsize=12)
     ax.set_title(r"A1-1: MPS (Marginal Propensity to Save)", fontsize=14, fontweight='bold')
 
-    # Add fixed variables info
-    fixed_str = ", ".join([f"{k}={v:.2f}" for k, v in fixed_values.items()])
+    # Add fixed variables info (handle string values like "COMPUTED_FROM_A")
+    fixed_str = ", ".join([
+        f"{k}={v:.2f}" if isinstance(v, (int, float)) else f"{k}={v}"
+        for k, v in fixed_values.items()
+    ])
     ax.text(0.02, 0.98, f"Fixed: {fixed_str}", transform=ax.transAxes,
             fontsize=9, verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
