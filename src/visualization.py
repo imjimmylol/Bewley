@@ -811,7 +811,7 @@ def plot_A1_resources_to_assets(
     debug: bool = False,
     xlim: Optional[tuple] = None,
     ylim: Optional[tuple] = None,
-    show_losses: bool = False,
+    show_losses: bool = True,
     n_points: int = 100
 ) -> plt.Figure:
     """
@@ -1073,7 +1073,7 @@ def plot_A1_1_MPS(
     xlim: Optional[tuple] = None,
     ylim: Optional[tuple] = None,
     n_points: int = 100,
-    show_losses: bool = False
+    show_losses: bool = True
 ) -> plt.Figure:
     """
     Plot A1-1: MPS (Marginal Propensity to Save) - the slope of m_t → a_{t+1}.
@@ -1242,7 +1242,7 @@ def plot_B1_assets_to_assets(
     debug: bool = False,
     xlim: Optional[tuple] = None,
     ylim: Optional[tuple] = None,
-    show_losses: bool = False,
+    show_losses: bool = True,
     n_points: int = 100
 ) -> plt.Figure:
     """
@@ -1311,7 +1311,7 @@ def plot_all_decision_rules(
     log_to_wandb: bool = False,
     step: Optional[int] = None,
     plots: Optional[List[str]] = None,
-    show_losses: bool = False,
+    show_losses: bool = True,
     n_points: int = 100
 ) -> Dict[str, plt.Figure]:
     """
