@@ -1,4 +1,13 @@
-# claude.md — Decision Rule Plots (Vibe-Coding Guideline)
+# CLAUDE.local.md — Bewley Model Development Guide
+
+This document contains implementation guidelines for two major features:
+- **Part 1**: Decision Rule Visualization (Synthetic Grid Evaluation)
+- **Part 2**: Prioritized Experience Replay (PER)
+
+---
+---
+
+# Part 1: Decision Rule Visualization
 
 ## 0 目標
 用一套固定規格把模型的 **self-insurance / history dependence / borrowing constraint / superstar 機制**用圖「釘死」。
@@ -481,5 +490,556 @@ def validate_plot_config(x_var, y_var, condition_vars):
 | `μ_t` | `mu` | TemporaryState |
 | `y_t` | `income_before_tax` | TemporaryState |
 | `Δa_t` | `savings - savings_input` | Computed |
+
+---
+---
+
+# Part 2: Prioritized Experience Replay (PER)
+
+## 1 Overview
+
+Prioritized Experience Replay improves sample efficiency by replaying experiences with higher TD-error (loss) more frequently. In the Bewley model context, we prioritize based on **total FOC loss** (FB + Euler + Labor).
+
+### Key Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Granularity | **Batch-level** | Each batch is one experience; simpler, sufficient prioritization |
+| Gradient flow | **Option A** (re-run `env.step()`) | Required for policy gradient to flow |
+| Branch storage | **Committed branch only** | Save memory; other branch not needed |
+| Buffer size | **100,000** | ~0.75 GB with float16 on 24GB RAM system |
+| Replay start | **From step 1** | No minimum buffer requirement |
+
+---
+
+## 2 Architecture
+
+**Following Algorithm 1 from the original PER paper (Schaul et al., 2016):**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Training Loop (for t = 1 to T)              │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │   Online Step (every step)                                  │ │
+│  │                                                             │ │
+│  │   1. env.step() → observe next state                        │ │
+│  │   2. Store to buffer with MAX PRIORITY: p_t = max_{i<t} p_i │ │
+│  │      (NO loss computation, NO backward pass)                │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                           │                                      │
+│                           ▼                                      │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │   Replay Phase (every K steps, i.e., when t ≡ 0 mod K)     │ │
+│  │                                                             │ │
+│  │   for j = 1 to batch_size:                                  │ │
+│  │     1. Sample experience j ~ P(j) = p_j^α / Σ_i p_i^α       │ │
+│  │     2. Compute IS weight: w_j = (N·P(j))^(-β) / max_i(w_i)  │ │
+│  │     3. Re-run env.step() with stored MainState              │ │
+│  │     4. Compute loss (δ_j = total FOC loss)                  │ │
+│  │     5. Update priority: p_j ← |δ_j| + ε                     │ │
+│  │     6. Accumulate: Δ ← Δ + w_j · δ_j · ∇θ                   │ │
+│  │   end for                                                   │ │
+│  │                                                             │ │
+│  │   7. Update weights: θ ← θ + η · Δ                          │ │
+│  └────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                 PrioritizedReplayBuffer                          │
+│  ┌─────────────────┐  ┌─────────────────────────────────────┐   │
+│  │    Sum Tree     │  │         Circular Buffer             │   │
+│  │  (priorities)   │  │  ┌─────────────────────────────┐    │   │
+│  │                 │  │  │ Experience[0]               │    │   │
+│  │   O(log N)      │  │  │  - savings (A,) float16     │    │   │
+│  │   sampling      │  │  │  - ability (A,) float16     │    │   │
+│  │                 │  │  │  - moneydisposable float16  │    │   │
+│  │   O(log N)      │  │  │  - ret (A,) float16         │    │   │
+│  │   update        │  │  │  - is_superstar (A,) bool   │    │   │
+│  │                 │  │  │  - committed_branch: str    │    │   │
+│  └─────────────────┘  │  │  - priority: float64        │    │   │
+│                       │  │  - step: int                │    │   │
+│                       │  └─────────────────────────────┘    │   │
+│                       │  │ Experience[1] ...           │    │   │
+│                       │  │ ...                         │    │   │
+│                       │  │ Experience[N-1]             │    │   │
+│                       └─────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3 Config Specification
+
+```yaml
+# Add to config YAML files
+prioritized_exp_replay:
+  enabled: true
+  buffer_size: 100000          # Number of experiences (batches) to store
+  alpha: 0.6                   # Prioritization exponent: 0=uniform, 1=full priority
+  beta_start: 0.4              # Importance sampling correction start
+  beta_end: 1.0                # Importance sampling correction end
+  beta_annealing_steps: 40000  # Steps to anneal beta from start to end
+  epsilon: 1e-6                # Small constant to prevent zero priority
+  replay_period: 4             # K: replay every K steps (Line 7: t ≡ 0 mod K)
+  batch_size: 64               # Number of experiences to sample per replay
+```
+
+### Parameter Explanation
+
+| Parameter | Symbol | Description |
+|-----------|--------|-------------|
+| `alpha` | α | Controls how much prioritization affects sampling. P(i) ∝ p_i^α |
+| `beta` | β | IS weight exponent: w_i = (N × P(i))^(-β). Anneals to 1 for unbiased gradients |
+| `epsilon` | ε | Prevents zero priority: p_i = \|δ_i\| + ε |
+| `replay_period` | K | Replay every K steps (Line 7: when t ≡ 0 mod K) |
+| `batch_size` | k | Number of experiences sampled per replay (minibatch size) |
+
+### Beta Annealing
+
+```python
+def compute_beta(step: int, config) -> float:
+    """Linear annealing from beta_start to beta_end."""
+    per = config.prioritized_exp_replay
+    progress = min(1.0, step / per.beta_annealing_steps)
+    return per.beta_start + progress * (per.beta_end - per.beta_start)
+```
+
+---
+
+## 4 Priority Definition
+
+**Following the original algorithm strictly:**
+
+### 4.1 Initial Priority (when storing new experience)
+
+```python
+# Line 6 of Algorithm 1: Store with MAXIMAL priority
+p_t = max(p_i for i in range(t))  # Max of all existing priorities
+
+# Special case: first experience
+p_1 = 1.0  # Line 2 of Algorithm 1
+```
+
+**Key insight:** We do NOT compute loss when storing. The loss is only computed during replay.
+
+### 4.2 Updated Priority (during replay)
+
+```python
+# Line 12 of Algorithm 1: Update priority AFTER computing loss
+p_j = |δ_j| + epsilon
+
+# Where δ_j (TD-error analog) is total loss from LossCalculator:
+δ_j = total_loss = weight_fb * FB_loss + weight_aux_mu * Euler_loss + weight_labor * Labor_loss
+```
+
+### 4.3 Sampling Probability
+
+```python
+# Line 9 of Algorithm 1: Proportional prioritization
+P(i) = p_i^alpha / Σ_j p_j^alpha
+```
+
+### 4.4 Importance Sampling Weight
+
+```python
+# Line 10 of Algorithm 1: Bias correction
+w_i = (N × P(i))^(-beta) / max_j(w_j)  # Normalized to [0, 1]
+```
+
+### Why Max Priority for New Experiences?
+
+1. **New experiences haven't been evaluated** - we don't know their TD-error yet
+2. **Ensures every experience gets sampled at least once** - high priority = high sampling probability
+3. **No extra computation during online step** - keeps online step fast
+4. **Optimistic initialization** - assumes new experiences might be important
+
+---
+
+## 5 Experience Storage Format
+
+### What to Store (Minimal for Option A)
+
+Since we re-run `env.step()` during replay, store only **MainState inputs**.
+
+**Note:** Priority is NOT stored in Experience. It is managed separately in the SumTree.
+
+```python
+@dataclass
+class Experience:
+    """Single experience for replay buffer."""
+
+    # === MainState inputs (required to reconstruct state) ===
+    savings: np.ndarray          # (A,) float16 - a_t
+    ability: np.ndarray          # (A,) float16 - v_t
+    moneydisposable: np.ndarray  # (A,) float16 - m_t
+    ret: np.ndarray              # (A,) float16 - r_{t-1}
+
+    # === Branch memory (for committed branch) ===
+    is_superstar: np.ndarray     # (A,) bool - committed branch status
+    committed_branch: str        # "A" or "B"
+
+    # === Metadata (for debugging/analysis only) ===
+    step: int                    # Training step when collected
+```
+
+### Memory Calculation
+
+| Field | Dtype | Size per Agent | Total (A=800) |
+|-------|-------|----------------|---------------|
+| savings | float16 | 2 bytes | 1,600 bytes |
+| ability | float16 | 2 bytes | 1,600 bytes |
+| moneydisposable | float16 | 2 bytes | 1,600 bytes |
+| ret | float16 | 2 bytes | 1,600 bytes |
+| is_superstar | bool | 1 byte | 800 bytes |
+| committed_branch | str | ~8 bytes | 8 bytes |
+| step | int64 | 8 bytes | 8 bytes |
+| **Total per experience** | | | **~7.6 KB** |
+| **Buffer (100k)** | | | **~0.73 GB** |
+
+**Note:** SumTree overhead adds ~1.6 MB for 100k capacity (2 * capacity * 8 bytes for float64).
+
+---
+
+## 6 File Structure
+
+```
+src/
+├── replay_buffer/
+│   ├── __init__.py              # Exports: PrioritizedReplayBuffer, Experience
+│   ├── sum_tree.py              # SumTree for O(log N) proportional sampling
+│   ├── experience.py            # Experience dataclass with quantization helpers
+│   └── prioritized_buffer.py    # Main PrioritizedReplayBuffer class
+```
+
+---
+
+## 7 Implementation Checklist
+
+### Phase 1: Core Data Structures
+
+#### 7.1 Create `src/replay_buffer/sum_tree.py`
+
+- [ ] **SumTree class**
+  ```python
+  class SumTree:
+      """Array-based sum tree for O(log N) proportional sampling."""
+
+      def __init__(self, capacity: int):
+          self.capacity = capacity
+          self.tree = np.zeros(2 * capacity - 1, dtype=np.float64)
+          self.data_pointer = 0
+          self.n_entries = 0
+          self.max_priority = 1.0  # Track max priority for new experiences (Line 2: p_1 = 1)
+
+      def add(self, priority: float) -> int:
+          """Add new entry with given priority, return leaf index."""
+          ...
+
+      def update(self, idx: int, priority: float) -> None:
+          """Update priority at leaf idx, propagate change up to root."""
+          # Also update max_priority if new priority is higher
+          self.max_priority = max(self.max_priority, priority)
+          ...
+
+      def get(self, value: float) -> Tuple[int, float]:
+          """Sample leaf index proportional to priority."""
+          ...
+
+      @property
+      def total(self) -> float:
+          """Return sum of all priorities (root node)."""
+          return self.tree[0]
+
+      @property
+      def min(self) -> float:
+          """Return minimum priority (for IS weight normalization)."""
+          ...
+  ```
+
+#### 7.2 Create `src/replay_buffer/experience.py`
+
+- [ ] **Experience dataclass** (NO priority field - managed by SumTree)
+  ```python
+  @dataclass
+  class Experience:
+      savings: np.ndarray          # (A,) float16
+      ability: np.ndarray          # (A,) float16
+      moneydisposable: np.ndarray  # (A,) float16
+      ret: np.ndarray              # (A,) float16
+      is_superstar: np.ndarray     # (A,) bool
+      committed_branch: str
+      step: int                    # For debugging/analysis
+  ```
+
+- [ ] **Quantization helpers**
+  ```python
+  def pack_experience(main_state: MainState, committed_branch: str,
+                      step: int) -> Experience:
+      """Pack MainState into compact Experience for storage.
+      NOTE: No loss parameter - priority is assigned by buffer using max_priority.
+      """
+      ...
+
+  def unpack_experience(exp: Experience, tax_params: Tensor,
+                        device: str) -> MainState:
+      """Reconstruct MainState from Experience for replay."""
+      ...
+  ```
+
+#### 7.3 Create `src/replay_buffer/prioritized_buffer.py`
+
+- [ ] **PrioritizedReplayBuffer class**
+  ```python
+  class PrioritizedReplayBuffer:
+      def __init__(
+          self,
+          capacity: int,
+          alpha: float,
+          epsilon: float = 1e-6,
+          device: str = "cpu"
+      ):
+          self.capacity = capacity
+          self.alpha = alpha
+          self.epsilon = epsilon
+          self.device = device
+
+          self.tree = SumTree(capacity)
+          self.data = [None] * capacity
+          self.position = 0
+          self.size = 0
+
+      def add(
+          self,
+          main_state: MainState,
+          committed_branch: str,
+          step: int
+      ) -> None:
+          """Add experience with MAX PRIORITY (Line 6 of Algorithm 1).
+
+          New experiences are assigned: p_t = max_{i<t} p_i
+          This ensures they get sampled at least once.
+          Priority will be updated when experience is replayed.
+          """
+          max_priority = self.tree.max_priority  # Get current max
+          priority = max_priority ** self.alpha  # Apply alpha exponent
+          ...
+
+      def sample(
+          self,
+          batch_size: int,
+          beta: float
+      ) -> Tuple[List[Experience], np.ndarray, np.ndarray]:
+          """
+          Sample batch proportional to priorities.
+
+          Returns:
+              experiences: List of Experience objects
+              indices: np.ndarray of buffer indices (for priority update)
+              is_weights: np.ndarray of importance sampling weights
+          """
+          ...
+
+      def update_priorities(
+          self,
+          indices: np.ndarray,
+          losses: np.ndarray
+      ) -> None:
+          """Update priorities after recomputing losses."""
+          ...
+
+      def __len__(self) -> int:
+          return self.size
+  ```
+
+---
+
+### Phase 2: Training Loop Integration
+
+#### 7.4 Update Config Loading
+
+- [ ] Add `prioritized_exp_replay` section to config YAML
+- [ ] Update `configloader.py` if needed for new fields
+
+#### 7.5 Update `src/train.py`
+
+- [ ] **Import replay buffer**
+  ```python
+  from src.replay_buffer import PrioritizedReplayBuffer, unpack_experience
+  ```
+
+- [ ] **Initialize buffer before training loop**
+  ```python
+  if config.prioritized_exp_replay.enabled:
+      buffer = PrioritizedReplayBuffer(
+          capacity=config.prioritized_exp_replay.buffer_size,
+          alpha=config.prioritized_exp_replay.alpha,
+          epsilon=config.prioritized_exp_replay.epsilon,
+          device=device
+      )
+  ```
+
+- [ ] **Online Step: Store experience with MAX PRIORITY (NO backward pass)**
+  ```python
+  # === ONLINE STEP (every step) ===
+
+  # 1. Snapshot state BEFORE env.step() (see Section 8.1)
+  main_state_snapshot = snapshot_main_state(main_state)
+
+  # 2. Run env.step() for simulation progression
+  main_state, temp_state, (parallel_A, outcomes_A), (parallel_B, outcomes_B) = env.step(
+      main_state=main_state,
+      policy_net=policy_net,
+      deterministic=False,  # Allow stochastic shocks for exploration
+      fix=fix_ability,
+      update_normalizer=True,
+      commit_strategy="random"
+  )
+  chosen_branch = ...  # Get which branch was committed
+
+  # 3. Store to buffer with MAX PRIORITY (NO loss computation!)
+  if config.prioritized_exp_replay.enabled:
+      buffer.add(
+          main_state=main_state_snapshot,
+          committed_branch=chosen_branch,
+          step=step
+          # NOTE: No loss parameter! Priority = max_priority from buffer
+      )
+
+  # 4. NO backward pass during online step!
+  # All learning happens in replay phase below
+  ```
+
+- [ ] **Replay Phase: Learning ONLY happens here (every K steps)**
+  ```python
+  # === REPLAY PHASE (when step % K == 0) ===
+
+  if config.prioritized_exp_replay.enabled and len(buffer) > 0:
+      if step % config.prioritized_exp_replay.replay_period == 0:
+          beta = compute_beta(step, config)
+
+          # Accumulate gradients over the batch
+          optimizer.zero_grad()
+          total_weighted_loss = 0.0
+
+          # Sample batch from buffer
+          experiences, indices, is_weights = buffer.sample(
+              batch_size=config.training.batch_size,
+              beta=beta
+          )
+
+          # Process each sampled experience
+          replay_losses = []
+          for j, exp in enumerate(experiences):
+              replay_main_state = unpack_experience(exp, tax_params, device)
+
+              # Re-run env.step() - CRITICAL: this provides gradient flow
+              _, temp_state, (pA, oA), (pB, oB) = env.step(
+                  main_state=replay_main_state,
+                  policy_net=policy_net,
+                  deterministic=True,  # No new shocks during replay
+                  fix=fix_ability,
+                  update_normalizer=False,  # Don't update normalizer during replay
+                  commit_strategy=exp.committed_branch
+              )
+
+              # Compute loss (δ_j in Algorithm 1)
+              replay_loss = loss_calculator.compute_all_losses(...)
+              replay_losses.append(replay_loss["total"].item())
+
+              # Accumulate weighted gradient (Line 13 of Algorithm 1)
+              weighted_loss = is_weights[j] * replay_loss["total"]
+              weighted_loss.backward()
+
+          # Update weights (Line 15 of Algorithm 1)
+          optimizer.step()
+
+          # Update priorities in buffer (Line 12 of Algorithm 1)
+          buffer.update_priorities(indices, np.array(replay_losses))
+  ```
+
+---
+
+### Phase 3: Monitoring & Debugging
+
+- [ ] **Add PER metrics to wandb logging**
+  ```python
+  if config.prioritized_exp_replay.enabled:
+      wandb.log({
+          "per/buffer_size": len(buffer),
+          "per/beta": beta,
+          "per/mean_priority": buffer.tree.total / max(len(buffer), 1),
+          "per/max_is_weight": is_weights.max() if is_weights is not None else 0,
+      }, step=step)
+  ```
+
+- [ ] **Add buffer checkpoint saving**
+  ```python
+  if step % config.training.save_interval == 0:
+      buffer.save(os.path.join(states_dir, f"buffer_step_{step}.pkl"))
+  ```
+
+---
+
+## 8 Important Implementation Notes
+
+### 8.1 Saving MainState Before Commit
+
+The current `env.step()` modifies `main_state` in-place via `commit()`. For PER, we need the state **before** commit:
+
+```python
+# In training loop, BEFORE env.step():
+main_state_snapshot = MainState(
+    moneydisposable=main_state.moneydisposable.clone(),
+    savings=main_state.savings.clone(),
+    ability=main_state.ability.clone(),
+    ret=main_state.ret.clone(),
+    tax_params=main_state.tax_params,  # Can share reference
+    is_superstar_vA=main_state.is_superstar_vA.clone(),
+    is_superstar_vB=main_state.is_superstar_vB.clone(),
+    ability_history_vA=None,  # Not needed for loss computation
+    ability_history_vB=None,
+)
+
+# Then run env.step()...
+# Then add snapshot to buffer
+```
+
+### 8.2 Deterministic Replay
+
+During replay, use `deterministic=True` in `env.step()` to avoid new random shocks. The goal is to re-evaluate the **same** state transition, not explore new ones.
+
+### 8.3 Gradient Flow Verification
+
+Ensure gradients flow correctly during replay:
+```python
+# The replayed loss must have requires_grad=True
+assert replay_loss.requires_grad, "Replay loss must have gradient connection to policy_net"
+```
+
+### 8.4 Numerical Stability
+
+- Use `float64` for sum tree to prevent precision loss with many updates
+- Clip IS weights to prevent explosion: `is_weights = np.clip(is_weights, 0, 100)`
+- Use `epsilon` to prevent zero priorities
+
+---
+
+## 9 Variable Mapping (PER-specific)
+
+| Training Loop Variable | Experience Field | Notes |
+|------------------------|------------------|-------|
+| `main_state.savings` (before step) | `savings` | a_t, input to policy |
+| `main_state.ability` | `ability` | v_t, input to policy |
+| `main_state.moneydisposable` | `moneydisposable` | m_t, input to policy |
+| `main_state.ret` | `ret` | r_{t-1}, lagged return |
+| `main_state.is_superstar_vA/vB` | `is_superstar` | Only committed branch |
+| `chosen_branch` | `committed_branch` | "A" or "B" |
+| `step` | `step` | For debugging/analysis |
+
+**Note on Priority:**
+- Initial priority = `buffer.tree.max_priority` (NOT computed loss)
+- Priority is updated to `|loss| + ε` only AFTER experience is sampled and replayed
 
 ---
