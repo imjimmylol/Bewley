@@ -106,7 +106,7 @@ class PrioritizedReplayBuffer:
 
         # Add to tree (returns the data index where it was stored)
         data_idx = self.tree.add(priority)
-
+        
         # Store experience in circular buffer
         self.data[data_idx] = exp
 
