@@ -267,9 +267,13 @@ def train(config, run):
                 weights_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
 
                 # Compute losses for the batch of experiences
-                # replay_temp_state, replay_outcomes_A, replay_outcomes_B = replay_step(
-                #     experiences, env, policy_net
-                # )
+
+                for exp, is_weight in zip(experiences, weights_tensor):
+                    replay_temp_state, replay_outcomes_A, replay_outcomes_B = replay_step(
+                        exp, env, policy_net
+                    )
+
+                
                 
 
                 
