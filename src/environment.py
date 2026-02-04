@@ -546,7 +546,7 @@ class EconomyEnv:
         fix: bool = False,
         update_normalizer: bool = True,
         commit_strategy: Literal["random", "A", "B"] = "random"
-    ) -> Tuple[MainState, TemporaryState, Tuple[ParallelState, Dict], Tuple[ParallelState, Dict]]:
+    ) -> Tuple[MainState, TemporaryState, Tuple[ParallelState, Dict], Tuple[ParallelState, Dict], Literal["A", "B"]]:
         """
         Execute one full environment step.
 
@@ -570,6 +570,7 @@ class EconomyEnv:
             temp_state: TemporaryState (realized outcomes at time t)
             (parallel_A, outcomes_A): Branch A state and outcomes
             (parallel_B, outcomes_B): Branch B state and outcomes
+            chosen_branch: Which branch was committed ("A" or "B")
         """
         # STEP 1 & 2: Create TemporaryState
         temp_state = self.create_temporary_state(
@@ -614,7 +615,7 @@ class EconomyEnv:
         chosen_parallel = parallel_A if chosen_branch == "A" else parallel_B
         self.commit_to_main(main_state, chosen_parallel, chosen_branch)
 
-        return main_state, temp_state, (parallel_A, outcomes_A), (parallel_B, outcomes_B)
+        return main_state, temp_state, (parallel_A, outcomes_A), (parallel_B, outcomes_B), chosen_branch
 
     # ========================================================================
     # UTILITY FUNCTIONS

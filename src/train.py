@@ -22,6 +22,8 @@ from src.policy_evaluation import (
     PolicyEvaluator,
     collect_ranges_from_step
 )
+from src.replay_buffer.prioritized_buffer import PrioritizedReplayBuffer
+from src.replay_buffer.experience import snapshot_main_state, pack_experience, replay_step
 import numpy as np
 
 def initialize_env_state(config, device="cpu"):
@@ -180,6 +182,31 @@ def train(config, run):
     # Initialize historical ranges for synthetic grid evaluation
     # Enable per-agent tracking so we can use agent-specific x-axis ranges
     historical_ranges = HistoricalRanges(track_per_agent=True)
+
+    # --- Initialize Prioritized Experience Replay Buffer ---
+    per_config = getattr(config, 'prioritized_exp_replay', None)
+    use_per = per_config is not None and getattr(per_config, 'enabled', False)
+
+    if use_per:
+        replay_buffer = PrioritizedReplayBuffer(
+            capacity=per_config.buffer_size,
+            alpha=per_config.alpha,
+            beta_start=per_config.beta_start,
+            beta_end=per_config.beta_end,
+            beta_annealing_steps=per_config.beta_annealing_steps,
+            epsilon=per_config.epsilon
+        )
+        replay_period = per_config.replay_period
+        replay_batch_size = per_config.batch_size
+        replay_buffer_dir = os.path.join(base_checkpoint_dir, "replay_buffer")
+        os.makedirs(replay_buffer_dir, exist_ok=True)
+        print(f"✓ Prioritized Experience Replay enabled")
+        print(f"  - Buffer capacity: {per_config.buffer_size}")
+        print(f"  - Alpha: {per_config.alpha}, Beta: {per_config.beta_start} → {per_config.beta_end}")
+        print(f"  - Replay period: every {replay_period} steps")
+    else:
+        replay_buffer = None
+        print("✓ Prioritized Experience Replay disabled")
     
     # --- 3.5 Plot initial state distributions before training ---
     print("Plotting initial state distributions...")
@@ -200,6 +227,11 @@ def train(config, run):
 
     total_steps = config.training.training_steps
     for step in tqdm(range(1, total_steps + 1), total=total_steps, desc="Training", ncols=100):
+        # ==== SNAPSHOT MAIN STATE (for PER) ====
+        # Capture state BEFORE env.step() for experience replay
+        if use_per:
+            main_state_snapshot = snapshot_main_state(main_state)
+
         # ==== STEP THE ENVIRONMENT ====
         # This performs the full 4-step workflow:
         # 1. Agents observe MainState[t] and act
@@ -207,7 +239,7 @@ def train(config, run):
         # 3. Transition to ParallelState A and B with different shocks
         # 4. Compute outcomes for both branches, choose one to commit
 
-        main_state, temp_state, (parallel_A, outcomes_A), (parallel_B, outcomes_B) = env.step(
+        main_state, temp_state, (parallel_A, outcomes_A), (parallel_B, outcomes_B), chosen_branch = env.step(
             main_state=main_state,
             policy_net=policy_net,
             deterministic=False,
@@ -215,6 +247,12 @@ def train(config, run):
             update_normalizer=True,
             commit_strategy="random"
         )
+
+        if use_per and step % replay_period == 0 and len(replay_buffer) >= replay_batch_size:
+            pass
+
+
+
 
         # ==== EXTRACT VARIABLES FOR LOSS COMPUTATION ====
         # Current period (t) outcomes from TemporaryState

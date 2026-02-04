@@ -1,0 +1,56 @@
+        # ==== PRIORITIZED EXPERIENCE REPLAY PHASE ====
+        # Algorithm 1, Lines 7-17: Replay every K steps (t ≡ 0 mod K)
+        # This happens BEFORE current step's loss computation (policy updated first)
+        if use_per and step % replay_period == 0 and len(replay_buffer) >= replay_batch_size:
+            # Line 8-9: Sample k transitions with proportional priority
+            experiences, indices, weights = replay_buffer.sample(replay_batch_size, step)
+            weights_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
+
+            # Line 13: Accumulate weight-change ∆
+            optimizer.zero_grad()
+            weighted_losses = []
+            td_errors = []
+
+            for j, (exp, wj) in enumerate(zip(experiences, weights_tensor)):
+                # Forward pass: replay experience through policy network
+                replay_temp_state, replay_outcomes_A, replay_outcomes_B = replay_step(
+                    exp, env, policy_net
+                )
+
+                # Compute loss (proxy for TD-error δj)
+                replay_loss = loss_calculator.compute_all_losses(
+                    consumption_t=replay_temp_state.consumption,
+                    labor_t=replay_temp_state.labor,
+                    ibt=replay_temp_state.income_before_tax,
+                    savings_ratio_t=replay_temp_state.savings_ratio,
+                    mu_t=replay_temp_state.mu,
+                    wage_t=replay_temp_state.wage,
+                    ret_t=replay_temp_state.ret,
+                    money_disposable_t=replay_temp_state.money_disposable,
+                    ability_t=replay_temp_state.ability,
+                    consumption_A_tp1=replay_outcomes_A["consumption"],
+                    consumption_B_tp1=replay_outcomes_B["consumption"],
+                    ibt_A_tp1=replay_outcomes_A["income_before_tax"],
+                    ibt_B_tp1=replay_outcomes_B["income_before_tax"]
+                )
+
+                # ∆ ← ∆ + wj · δj · ∇θQ
+                weighted_losses.append(wj * replay_loss["total"])
+                td_errors.append(replay_loss["total"].detach().item())
+
+            # Line 15: Update weights θ ← θ + η · ∆
+            total_replay_loss = sum(weighted_losses) / len(weighted_losses)
+            total_replay_loss.backward()
+            optimizer.step()
+
+            # Line 12: Update priorities pj ← |δj|
+            new_priorities = [abs(td_err) + per_config.epsilon for td_err in td_errors]
+            replay_buffer.update_priorities(indices, new_priorities)
+
+            # Log replay metrics
+            if step % config.training.display_step == 0:
+                wandb.log({
+                    "replay/loss": total_replay_loss.item(),
+                    "replay/buffer_size": len(replay_buffer),
+                    "replay/beta": replay_buffer.compute_beta(step)
+                }, step=step)
