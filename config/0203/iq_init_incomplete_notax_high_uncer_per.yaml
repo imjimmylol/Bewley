@@ -91,7 +91,7 @@ prioritized_exp_replay:
   alpha: 0.6                   # Prioritization exponent: 0=uniform, 1=full priority
   beta_start: 0.4              # Importance sampling correction start
   beta_end: 1.0                # Importance sampling correction end
-  beta_annealing_steps: ${eval:'int(${training.training_steps} * 0.5)'}  # Steps to anneal beta from start to end
+  beta_annealing_steps: 2500  # Steps to anneal beta from start to end (50% of training_steps)
   epsilon: 1e-6                # Small constant to prevent zero priority
   replay_period: 4             # K: replay every K steps (Line 7: t ≡ 0 mod K)
   gradient_steps: 1          # Number of gradient steps per repla

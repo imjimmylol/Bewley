@@ -11,8 +11,7 @@ from typing import List, Tuple, Optional
 import numpy as np
 
 from src.replay_buffer.sum_tree import SumTree
-from src.replay_buffer.experience import Experience, pack_experience, snapshot_main_state
-from src.env_state import MainState, ParallelState
+from src.replay_buffer.experience import Experience
 
 
 class PrioritizedReplayBuffer:
@@ -59,9 +58,9 @@ class PrioritizedReplayBuffer:
             epsilon: Small constant to prevent zero priority
             device: Device for tensor operations during replay
         """
-        self.capacity = capacity
-        self.alpha = alpha
-        self.epsilon = epsilon
+        self.capacity = int(capacity)
+        self.alpha = float(alpha)
+        self.epsilon = float(epsilon)
         self.device = device
 
         # SumTree for priority-based sampling
@@ -72,14 +71,7 @@ class PrioritizedReplayBuffer:
         self.position = 0
         self.size = 0
 
-    def add(
-        self,
-        main_state_snapshot: MainState,
-        parallel_A: ParallelState,
-        parallel_B: ParallelState,
-        committed_branch: str,
-        step: int
-    ) -> None:
+    def add(self, experience: Experience) -> None:
         """
         Add experience with MAX PRIORITY (Line 6 of Algorithm 1).
 
@@ -88,14 +80,9 @@ class PrioritizedReplayBuffer:
         Priority will be updated when experience is replayed.
 
         Args:
-            main_state_snapshot: MainState snapshot taken BEFORE env.step()
-            parallel_A: ParallelState from branch A (contains shock outcomes)
-            parallel_B: ParallelState from branch B (contains shock outcomes)
-            committed_branch: Which branch was committed ("A" or "B")
-            step: Training step when collected
+            experience: Pre-packed Experience object (use pack_experience())
         """
-        # Pack MainState + shock outcomes into Experience
-        exp = pack_experience(main_state_snapshot, parallel_A, parallel_B, committed_branch, step)
+        exp = experience
 
         # Get max priority for new experience (Line 6 of Algorithm 1)
         # First experience gets priority 1.0 (Line 2)
@@ -252,5 +239,9 @@ def compute_beta(step: int, config) -> float:
         beta: Current beta value
     """
     per = config.prioritized_exp_replay
-    progress = min(1.0, step / per.beta_annealing_steps)
-    return per.beta_start + progress * (per.beta_end - per.beta_start)
+    # Convert to numeric types in case wandb returns strings
+    beta_annealing_steps = int(per.beta_annealing_steps)
+    beta_start = float(per.beta_start)
+    beta_end = float(per.beta_end)
+    progress = min(1.0, step / beta_annealing_steps)
+    return beta_start + progress * (beta_end - beta_start)

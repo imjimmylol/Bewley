@@ -22,7 +22,7 @@ from src.policy_evaluation import (
     PolicyEvaluator,
     collect_ranges_from_step
 )
-from src.replay_buffer.prioritized_buffer import PrioritizedReplayBuffer
+from src.replay_buffer.prioritized_buffer import PrioritizedReplayBuffer, compute_beta
 from src.replay_buffer.experience import snapshot_main_state, pack_experience, replay_step
 import numpy as np
 
@@ -191,9 +191,6 @@ def train(config, run):
         replay_buffer = PrioritizedReplayBuffer(
             capacity=per_config.buffer_size,
             alpha=per_config.alpha,
-            beta_start=per_config.beta_start,
-            beta_end=per_config.beta_end,
-            beta_annealing_steps=per_config.beta_annealing_steps,
             epsilon=per_config.epsilon
         )
         replay_period = per_config.replay_period
@@ -282,7 +279,7 @@ def train(config, run):
 
         if use_per and step % replay_period == 0 and len(replay_buffer) >= replay_batch_size:
 
-            beta = replay_buffer.compute_beta(step)
+            beta = compute_beta(step, config)
             optimizer.zero_grad()
 
             # Accumulators for PER metrics
@@ -299,8 +296,8 @@ def train(config, run):
                 # Compute losses for the mini-batch of experiences
                 updated_priorities = []
                 for exp, is_weight in zip(experiences, weights_tensor):
-                    replay_temp_state, replay_outcomes_A, replay_outcomes_B = replay_step(
-                        exp, env, policy_net
+                    _, replay_temp_state, (_, replay_outcomes_A), (_, replay_outcomes_B) = replay_step(
+                        exp, env, policy_net, device=device
                     )
 
                     replay_loss = loss_calculator.compute_all_losses(
@@ -411,8 +408,8 @@ def train(config, run):
                 # Create reference state from current simulation for GE-aware evaluation
                 # This uses actual tensors as background population (detached from graph)
                 reference_state = {
-                    "money": money_disposable_t.detach(),  # (B, A)
-                    "ability": ability_t.detach(),  # (B, A)
+                    "money": temp_state.money_disposable.detach(),  # (B, A)
+                    "ability": temp_state.ability.detach(),  # (B, A)
                 }
                 evaluator = PolicyEvaluator(
                     policy_net=policy_net,
@@ -437,11 +434,9 @@ def train(config, run):
         # CRITICAL: Clear temporary variables to prevent memory leaks
         # Delete tensors that have computational graphs attached
         del temp_state, parallel_A, parallel_B, outcomes_A, outcomes_B
-        del consumption_t, labor_t, savings_ratio_t, mu_t, wage_t, ret_t, money_disposable_t, savings_t
-        del consumption_A_tp1, consumption_B_tp1, ibt, ability_t
-        del income_before_tax_A_tp1, income_before_tax_B_tp1
-        # Delete all individual losses from the loss dict
-        del loss
+        del online_loss
+        if use_per and 'main_state_snapshot' in dir():
+            del main_state_snapshot, experience
 
         # --- 5. Save checkpoints periodically ---
         if step % config.training.save_interval == 0:
