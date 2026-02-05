@@ -261,92 +261,44 @@ def train(config, run):
         if use_per and step % replay_period == 0 and len(replay_buffer) >= replay_batch_size:
             
             beta = replay_buffer.compute_beta(step)
-
+            optimizer.zero_grad()
+            # _replay_iter Loop corresponding to gradient_steps (Line 8 of Algorithm 1)
             for _replay_iter in range(per_config.gradient_steps):
                 experiences, indices, weights = replay_buffer.sample(replay_batch_size, beta)
                 weights_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
 
-                # Compute losses for the batch of experiences
-
+                # Compute losses for the mini-batch of experiences
+                updated_priorities = []
                 for exp, is_weight in zip(experiences, weights_tensor):
                     replay_temp_state, replay_outcomes_A, replay_outcomes_B = replay_step(
                         exp, env, policy_net
                     )
 
-                
-                
+                    replay_loss = loss_calculator.compute_all_losses(
+                        consumption_t=replay_temp_state.consumption,
+                        labor_t=replay_temp_state.labor,
+                        ibt=replay_temp_state.income_before_tax,
+                        savings_ratio_t=replay_temp_state.savings_ratio,
+                        mu_t=replay_temp_state.mu,
+                        wage_t=replay_temp_state.wage,
+                        ret_t=replay_temp_state.ret,
+                        money_disposable_t=replay_temp_state.money_disposable,
+                        ability_t=replay_temp_state.ability,
+                        consumption_A_tp1=replay_outcomes_A["consumption"],
+                        consumption_B_tp1=replay_outcomes_B["consumption"],
+                        ibt_A_tp1=replay_outcomes_A["income_before_tax"],
+                        ibt_B_tp1=replay_outcomes_B["income_before_tax"]
+                    )
 
-                
+                    weithed_loss = (replay_loss["total"]*is_weight) / (replay_batch_size*per_config.gradient_steps)
+                    weithed_loss.backward()
+                    updated_priorities.append(replay_loss["total"].item() + replay_buffer.epsilon)
 
-
-
-
-
-        # # ==== EXTRACT VARIABLES FOR LOSS COMPUTATION ====
-        # # Current period (t) outcomes from TemporaryState
-        # consumption_t = temp_state.consumption              # (B, A)
-        # labor_t = temp_state.labor                          # (B, A)
-        # savings_ratio_t = temp_state.savings_ratio          # (B, A)
-        # ibt = temp_state.income_before_tax
-        # mu_t = temp_state.mu                                # (B, A)
-        # wage_t = temp_state.wage                            # (B, A)
-        # ret_t = temp_state.ret                              # (B, A)
-        # money_disposable_t = temp_state.money_disposable    # (B, A)
-        # ability_t = temp_state.ability
-        # savings_t = temp_state.savings  # Savings for t+1 (allocated from budget at t)
-
-        # # Next period (t+1) outcomes from parallel branches
-        # consumption_A_tp1 = outcomes_A["consumption"]       # (B, A)
-        # income_before_tax_A_tp1 = outcomes_A["income_before_tax"]
-        # consumption_B_tp1 = outcomes_B["consumption"]       # (B, A)
-        # income_before_tax_B_tp1 = outcomes_B["income_before_tax"]
-
-        # # ==== EXTRACT NORMALIZED FEATURES FOR DEBUGGING ====
-        # # Get normalized features that were fed to the policy network
-        # # These are computed internally during env.step()
-        # with torch.no_grad():
-        #     normalized_features, _ = env._prepare_features(main_state, update_normalizer=False)
-        #     # Extract individual normalized features from the stacked tensor
-        #     # normalized_features shape: (B, A, 2A+2)
-        #     # Structure: [all_money (2A), money_self (1), all_ability (2A), ability_self (1)]
-        #     # Wait, need to check actual structure from buildipnuts.py
-        #     # From buildipnuts: features = [sum_info_rep (2A), money_self (1), ability_self (1)]
-        #     # So shape is (B, A, 2A+2)
-
-        #     normalized_money_mean = normalized_features[..., -2].mean().item()  # money_self
-        #     normalized_ability_mean = normalized_features[..., -1].mean().item()  # ability_self
-        #     normalized_money_std = normalized_features[..., -2].std().item()
-        #     normalized_ability_std = normalized_features[..., -1].std().item()
-
-        # # ==== COMPUTE LOSSES (PLACEHOLDER - TO BE IMPLEMENTED) ====
-        
-        # loss = loss_calculator.compute_all_losses(
-        #     # Current period (t)
-        #     consumption_t = consumption_t,
-        #     labor_t=labor_t,
-        #     ibt=ibt,
-        #     savings_ratio_t=savings_ratio_t,
-        #     mu_t=mu_t,
-        #     wage_t=wage_t,
-        #     ret_t=ret_t,
-        #     money_disposable_t=money_disposable_t,
-        #     ability_t=ability_t,
-        #     # Next period (t+1) - two branches
-        #     consumption_A_tp1=consumption_A_tp1,
-        #     consumption_B_tp1=consumption_B_tp1,
-        #     ibt_A_tp1=income_before_tax_A_tp1,
-        #     ibt_B_tp1=income_before_tax_B_tp1
-        # )
-
-
-        # # ==== BACKWARD PASS AND PARAMETER UPDATE ====
-        # optimizer.zero_grad()
-        # loss["total"].backward()
-
-        # # Optional: gradient clipping
-        # # torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=1.0)
-
-        # optimizer.step()
+                # Update priorities in the replay buffer
+                replay_buffer.update_priorities(indices, updated_priorities)
+            # Backpropagate and optimize the policy network
+            optimizer.step()
+            
 
         # ==== MONITORING: Log metrics, correlations, and debug info ====
         monitor.log_step(step, main_state, temp_state, loss)
