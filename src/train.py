@@ -247,6 +247,25 @@ def train(config, run):
             update_normalizer=True,
             commit_strategy="random"
         )
+
+        # ==== COMPUTE ONLINE LOSS (eval-only for monitoring) ====
+        with torch.no_grad():
+            online_loss = loss_calculator.compute_all_losses(
+                consumption_t=temp_state.consumption,
+                labor_t=temp_state.labor,
+                ibt=temp_state.income_before_tax,
+                savings_ratio_t=temp_state.savings_ratio,
+                mu_t=temp_state.mu,
+                wage_t=temp_state.wage,
+                ret_t=temp_state.ret,
+                money_disposable_t=temp_state.money_disposable,
+                ability_t=temp_state.ability,
+                consumption_A_tp1=outcomes_A["consumption"],
+                consumption_B_tp1=outcomes_B["consumption"],
+                ibt_A_tp1=outcomes_A["income_before_tax"],
+                ibt_B_tp1=outcomes_B["income_before_tax"]
+            )
+
         # ==== STORE EXPERIENCE IN REPLAY BUFFER ====
         if use_per:
             experience = pack_experience(
@@ -258,14 +277,24 @@ def train(config, run):
             )
             replay_buffer.add(experience)
 
+        # ==== PRIORITIZED EXPERIENCE REPLAY ====
+        per_metrics = None  # Default when PER block doesn't run
+
         if use_per and step % replay_period == 0 and len(replay_buffer) >= replay_batch_size:
-            
+
             beta = replay_buffer.compute_beta(step)
             optimizer.zero_grad()
+
+            # Accumulators for PER metrics
+            replay_losses = {"total": [], "fb": [], "aux_mu": [], "labor": []}
+            all_weights = []
+            all_priorities = []
+
             # _replay_iter Loop corresponding to gradient_steps (Line 8 of Algorithm 1)
             for _replay_iter in range(per_config.gradient_steps):
                 experiences, indices, weights = replay_buffer.sample(replay_batch_size, beta)
                 weights_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
+                all_weights.extend(weights)
 
                 # Compute losses for the mini-batch of experiences
                 updated_priorities = []
@@ -292,16 +321,50 @@ def train(config, run):
 
                     weithed_loss = (replay_loss["total"]*is_weight) / (replay_batch_size*per_config.gradient_steps)
                     weithed_loss.backward()
-                    updated_priorities.append(replay_loss["total"].item() + replay_buffer.epsilon)
 
+                    priority = torch.abs(replay_loss["total"]).item() + replay_buffer.epsilon
+                    updated_priorities.append(priority)
+
+                    # Accumulate for monitoring
+                    replay_losses["total"].append(replay_loss["total"].item())
+                    replay_losses["fb"].append(replay_loss["fb"].item())
+                    replay_losses["aux_mu"].append(replay_loss["aux_mu"].item())
+                    replay_losses["labor"].append(replay_loss["labor"].item())
+
+                all_priorities.extend(updated_priorities)
                 # Update priorities in the replay buffer
                 replay_buffer.update_priorities(indices, updated_priorities)
+
             # Backpropagate and optimize the policy network
             optimizer.step()
-            
 
+            # Build per_metrics dict for monitoring
+            per_metrics = {
+                "beta": beta,
+                "buffer_size": len(replay_buffer),
+                "buffer_capacity": replay_buffer.capacity,
+                # Replay loss stats
+                "replay_loss_total_mean": np.mean(replay_losses["total"]),
+                "replay_loss_total_max": np.max(replay_losses["total"]),
+                "replay_loss_total_min": np.min(replay_losses["total"]),
+                "replay_loss_fb_mean": np.mean(replay_losses["fb"]),
+                "replay_loss_aux_mu_mean": np.mean(replay_losses["aux_mu"]),
+                "replay_loss_labor_mean": np.mean(replay_losses["labor"]),
+                # Priority stats
+                "priority_mean": np.mean(all_priorities),
+                "priority_max": np.max(all_priorities),
+                "priority_min": np.min(all_priorities),
+                "priority_std": np.std(all_priorities),
+                # IS weight stats
+                "is_weight_mean": np.mean(all_weights),
+                "is_weight_max": np.max(all_weights),
+                "is_weight_min": np.min(all_weights),
+                "is_weight_std": np.std(all_weights),
+            }
+            
+        
         # ==== MONITORING: Log metrics, correlations, and debug info ====
-        monitor.log_step(step, main_state, temp_state, loss)
+        monitor.log_step(step, main_state, temp_state, online_loss, per_metrics)
 
         # ==== COLLECT HISTORICAL RANGES for synthetic grid evaluation ====
         # track_per_agent=True enables agent-specific x-axis ranges in visualization

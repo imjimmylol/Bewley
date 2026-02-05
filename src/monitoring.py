@@ -36,7 +36,7 @@ class TrainingMonitor:
         self.prev_ability = None
         self.prev_money = None
 
-    def log_step(self, step, main_state, temp_state, loss_dict):
+    def log_step(self, step, main_state, temp_state, loss_dict, per_metrics=None):
         """
         Main logging method called every training step.
 
@@ -45,6 +45,7 @@ class TrainingMonitor:
             main_state: MainState instance
             temp_state: TemporaryState instance
             loss_dict: Dictionary with loss components (total, fb, aux_mu, labor)
+            per_metrics: Optional dict with PER metrics (beta, priorities, IS weights, replay losses)
         """
         # Determine if we should log this step
         should_display = (step % self.config.training.display_step == 0 or
@@ -53,7 +54,7 @@ class TrainingMonitor:
 
         # Extract all metrics (only if logging is needed)
         if should_display or should_log_wandb:
-            metrics = self._extract_metrics(main_state, temp_state, loss_dict)
+            metrics = self._extract_metrics(main_state, temp_state, loss_dict, per_metrics)
 
             # Log to console
             if should_display:
@@ -67,9 +68,15 @@ class TrainingMonitor:
             self.prev_ability = metrics['ability_array'].copy()
             self.prev_money = metrics['money_array'].copy()
 
-    def _extract_metrics(self, main_state, temp_state, loss_dict):
+    def _extract_metrics(self, main_state, temp_state, loss_dict, per_metrics=None):
         """
         Extract and convert all metrics to scalars/numpy arrays.
+
+        Args:
+            main_state: MainState instance
+            temp_state: TemporaryState instance
+            loss_dict: Dictionary with loss components
+            per_metrics: Optional dict with PER metrics
 
         Returns:
             dict: All extracted metrics
@@ -124,6 +131,32 @@ class TrainingMonitor:
             metrics['labor_array']
         )
         metrics.update(correlation_metrics)
+
+        # === PER METRICS (if available) ===
+        if per_metrics is not None:
+            metrics['per_beta'] = per_metrics['beta']
+            metrics['per_buffer_size'] = per_metrics['buffer_size']
+            metrics['per_buffer_utilization'] = per_metrics['buffer_size'] / per_metrics['buffer_capacity']
+
+            # Replay loss stats
+            metrics['replay_loss_total_mean'] = per_metrics['replay_loss_total_mean']
+            metrics['replay_loss_total_max'] = per_metrics['replay_loss_total_max']
+            metrics['replay_loss_total_min'] = per_metrics['replay_loss_total_min']
+            metrics['replay_loss_fb_mean'] = per_metrics['replay_loss_fb_mean']
+            metrics['replay_loss_aux_mu_mean'] = per_metrics['replay_loss_aux_mu_mean']
+            metrics['replay_loss_labor_mean'] = per_metrics['replay_loss_labor_mean']
+
+            # Priority stats
+            metrics['priority_mean'] = per_metrics['priority_mean']
+            metrics['priority_max'] = per_metrics['priority_max']
+            metrics['priority_min'] = per_metrics['priority_min']
+            metrics['priority_std'] = per_metrics['priority_std']
+
+            # IS weight stats
+            metrics['is_weight_mean'] = per_metrics['is_weight_mean']
+            metrics['is_weight_max'] = per_metrics['is_weight_max']
+            metrics['is_weight_min'] = per_metrics['is_weight_min']
+            metrics['is_weight_std'] = per_metrics['is_weight_std']
 
         return metrics
 
@@ -383,3 +416,34 @@ class TrainingMonitor:
 
             "step": step
         })
+
+        # === PER METRICS (logged under per/ namespace, only when available) ===
+        if 'per_beta' in metrics:
+            wandb.log({
+                # PER state
+                "per/beta": metrics['per_beta'],
+                "per/buffer_size": metrics['per_buffer_size'],
+                "per/buffer_utilization": metrics['per_buffer_utilization'],
+
+                # Replay loss stats
+                "loss/replay_total_mean": metrics['replay_loss_total_mean'],
+                "loss/replay_total_max": metrics['replay_loss_total_max'],
+                "loss/replay_total_min": metrics['replay_loss_total_min'],
+                "loss/replay_fb_mean": metrics['replay_loss_fb_mean'],
+                "loss/replay_aux_mu_mean": metrics['replay_loss_aux_mu_mean'],
+                "loss/replay_labor_mean": metrics['replay_loss_labor_mean'],
+
+                # Priority stats
+                "per/priority_mean": metrics['priority_mean'],
+                "per/priority_max": metrics['priority_max'],
+                "per/priority_min": metrics['priority_min'],
+                "per/priority_std": metrics['priority_std'],
+
+                # IS weight stats
+                "per/is_weight_mean": metrics['is_weight_mean'],
+                "per/is_weight_max": metrics['is_weight_max'],
+                "per/is_weight_min": metrics['is_weight_min'],
+                "per/is_weight_std": metrics['is_weight_std'],
+
+                "step": step
+            })
