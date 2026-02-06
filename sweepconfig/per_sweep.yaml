@@ -1,0 +1,42 @@
+# sweepconfig/default_sweep.yaml
+#
+# Usage:
+# 1. Login to wandb: `wandb login`
+# 2. Initialize the sweep: `wandb sweep sweepconfig/default_sweep.yaml`
+# 3. Run the agent: `wandb agent <sweep_id>` (copy sweep_id from step 2)
+# 4. To run multiple agents in parallel: open multiple terminals and run the same agent command
+#
+# Notes:
+# - Each sweep run will get a unique auto-generated name (e.g., "divine-sweep-1")
+# - Checkpoints will be saved to separate directories: checkpoints/<run_name>/
+# - The 'exp_name' from config files is ignored during sweeps to prevent conflicts
+
+program: main.py
+method: grid  # Options: grid, random, bayes
+metric:
+  name: loss/total  # Metric to optimize (must match wandb.log key)
+  goal: minimize
+
+# Command to pass base config (optional, can override in agent command)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "--configs"
+  - "config/0203/iq_init_incomplete_notax_high_uncer_per.yaml"  # Base config file
+
+parameters:
+
+  # Sweep over shock parameters (example)
+  prioritized_exp_replay:
+    parameters:
+      enabled: true
+      buffer_size: 10000          # Number of experiences (batches) to store
+      alpha: [0, 0.2, 0.5, 0.8, 1]                   # Prioritization exponent: 0=uniform, 1=full priority
+      beta_start: [0.4, 0.6, 0.8]              # Importance sampling correction start
+      beta_end: 1.0                # Importance sampling correction end
+      beta_annealing_steps: [5000, 10000, 15000]  # Steps to anneal beta from start to end (50% of training_steps)
+      epsilon: 1e-6                # Small constant to prevent zero priority
+      replay_period: [10, 50, 100, 200, 500]             # K: replay every K steps (Line 7: t ≡ 0 mod K)
+      gradient_steps: [1, 2, 4, 6]          # Number of gradient steps per repla
+      batch_size: 64              # Number of experiences to sample per replay
