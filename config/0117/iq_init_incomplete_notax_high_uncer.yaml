@@ -8,11 +8,11 @@ exp_name: "bewley_iq_init_incomplete_notax_high_uncer"
 training:
   agents: 100
   learning_rate: 1e-4
-  training_steps: 5000
+  training_steps: 20000
   batch_size: 32
   display_step: 1000
   train_step_interval: 4
-  save_interval: 1000
+  save_interval: 2000
 
 bewley_model:
   theta: 1.0         # CRRA
