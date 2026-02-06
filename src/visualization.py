@@ -812,7 +812,8 @@ def plot_A1_resources_to_assets(
     xlim: Optional[tuple] = None,
     ylim: Optional[tuple] = None,
     show_losses: bool = True,
-    n_points: int = 100
+    n_points: int = 100,
+    foc_threshold: float = 0.1
 ) -> plt.Figure:
     """
     Plot A1: m_t → a_{t+1} (Resources to Next Assets)
@@ -830,6 +831,7 @@ def plot_A1_resources_to_assets(
         ylim: Optional tuple (ymin, ymax) for manual y-axis clipping
         show_losses: If True, add subplots showing FOC loss residuals
         n_points: Number of grid points for evaluation
+        foc_threshold: Threshold for Labor FOC loss to mark FOC-optimal regions (default: 0.1)
 
     Returns:
         matplotlib Figure
@@ -868,7 +870,8 @@ def plot_A1_resources_to_assets(
         debug=debug,
         xlim=xlim,
         ylim=ylim,
-        n_points=n_points
+        n_points=n_points,
+        foc_threshold=foc_threshold
     )
     return fig
 
@@ -887,7 +890,8 @@ def plot_decision_rule_with_losses(
     n_points: int = 100,
     debug: bool = False,
     xlim: Optional[tuple] = None,
-    ylim: Optional[tuple] = None
+    ylim: Optional[tuple] = None,
+    foc_threshold: float = 0.1
 ) -> plt.Figure:
     """
     Plot decision rule with FOC loss subplots sharing x-axis.
@@ -913,6 +917,7 @@ def plot_decision_rule_with_losses(
         debug: If True, print debug information
         xlim: Optional x-axis limits (in original scale)
         ylim: Optional y-axis limits for main plot
+        foc_threshold: Threshold for Labor FOC loss to mark FOC-optimal regions (default: 0.1)
 
     Returns:
         matplotlib Figure
@@ -1011,10 +1016,42 @@ def plot_decision_rule_with_losses(
         color = QUANTILE_COLORS.get(c_label, "#333333")
         ax_labor.plot(x_plot, labor_arr_plot, color=color, linewidth=1.5, alpha=0.8)
 
+    # Add reference line at foc_threshold
+    ax_labor.axhline(y=foc_threshold, color='black', linestyle='--', linewidth=1.5,
+                     alpha=0.7, label=f'threshold={foc_threshold:.0e}')
+    ax_labor.legend(loc='upper right', fontsize=8)
+
     ax_labor.set_ylabel("Labor FOC", fontsize=10)
     ax_labor.set_yscale('log')
     ax_labor.grid(True, alpha=0.3)
     ax_labor.set_title("Labor FOC Loss", fontsize=10)
+
+    # ================================================================
+    # Find FOC-optimal regions and shade on main plot
+    # ================================================================
+    # Check where ALL curves have Labor FOC loss < threshold
+    all_below_threshold = np.ones(len(x_plot), dtype=bool)
+    for c_label in color_levels:
+        labor_arr = losses["labor_foc_loss"][c_label]
+        all_below_threshold &= (labor_arr < foc_threshold)
+
+    # Find contiguous regions where all losses are below threshold
+    # and shade them on the main plot
+    if np.any(all_below_threshold):
+        # Find start and end indices of contiguous True regions
+        diff = np.diff(np.concatenate([[False], all_below_threshold, [False]]).astype(int))
+        starts = np.where(diff == 1)[0]
+        ends = np.where(diff == -1)[0]
+
+        for start_idx, end_idx in zip(starts, ends):
+            x_start = x_plot[start_idx]
+            x_end = x_plot[min(end_idx, len(x_plot) - 1)]
+            # Shade the FOC-optimal region on the main plot
+            ax_main.axvspan(x_start, x_end, alpha=0.15, color='green',
+                           label='FOC-optimal' if start_idx == starts[0] else None)
+
+        # Update legend to include FOC-optimal region
+        ax_main.legend(loc='best', fontsize=9)
 
     # ================================================================
     # Subplot 4: Aux Loss (Euler)
@@ -1073,7 +1110,8 @@ def plot_A1_1_MPS(
     xlim: Optional[tuple] = None,
     ylim: Optional[tuple] = None,
     n_points: int = 100,
-    show_losses: bool = True
+    show_losses: bool = True,
+    foc_threshold: float = 0.1
 ) -> plt.Figure:
     """
     Plot A1-1: MPS (Marginal Propensity to Save) - the slope of m_t → a_{t+1}.
@@ -1092,6 +1130,7 @@ def plot_A1_1_MPS(
         ylim: Optional tuple (ymin, ymax) for manual y-axis clipping
         n_points: Number of grid points for evaluation
         show_losses: If True, add subplots showing FOC loss residuals
+        foc_threshold: Threshold for Labor FOC loss to mark FOC-optimal regions (default: 0.1)
 
     Returns:
         matplotlib Figure
@@ -1192,10 +1231,35 @@ def plot_A1_1_MPS(
             labor_arr_plot = np.maximum(labor_arr, 1e-10)
             color = QUANTILE_COLORS.get(c_label, "#333333")
             ax_labor.plot(x_values, labor_arr_plot, color=color, linewidth=1.5, alpha=0.8)
+
+        # Add reference line at foc_threshold
+        ax_labor.axhline(y=foc_threshold, color='black', linestyle='--', linewidth=1.5,
+                         alpha=0.7, label=f'threshold={foc_threshold:.0e}')
+        ax_labor.legend(loc='upper right', fontsize=8)
+
         ax_labor.set_ylabel("Labor FOC", fontsize=10)
         ax_labor.set_yscale('log')
         ax_labor.grid(True, alpha=0.3)
         ax_labor.set_title("Labor FOC Loss", fontsize=10)
+
+        # Find FOC-optimal regions and shade on main plot
+        all_below_threshold = np.ones(len(x_values), dtype=bool)
+        for c_label in color_levels:
+            labor_arr = losses["labor_foc_loss"][c_label]
+            all_below_threshold &= (labor_arr < foc_threshold)
+
+        if np.any(all_below_threshold):
+            diff = np.diff(np.concatenate([[False], all_below_threshold, [False]]).astype(int))
+            starts = np.where(diff == 1)[0]
+            ends = np.where(diff == -1)[0]
+
+            for start_idx, end_idx in zip(starts, ends):
+                x_start = x_values[start_idx]
+                x_end = x_values[min(end_idx, len(x_values) - 1)]
+                ax.axvspan(x_start, x_end, alpha=0.15, color='green',
+                          label='FOC-optimal' if start_idx == starts[0] else None)
+
+            ax.legend(loc='best', fontsize=10)
 
         # Aux Loss subplot
         ax_aux = axes[3]
@@ -1243,7 +1307,8 @@ def plot_B1_assets_to_assets(
     xlim: Optional[tuple] = None,
     ylim: Optional[tuple] = None,
     show_losses: bool = True,
-    n_points: int = 100
+    n_points: int = 100,
+    foc_threshold: float = 0.1
 ) -> plt.Figure:
     """
     Plot B1: a_t → a_{t+1} (Assets Today to Assets Tomorrow)
@@ -1262,6 +1327,7 @@ def plot_B1_assets_to_assets(
         ylim: Optional tuple (ymin, ymax) for manual y-axis clipping
         show_losses: If True, add subplots showing FOC loss residuals
         n_points: Number of grid points for evaluation
+        foc_threshold: Threshold for Labor FOC loss to mark FOC-optimal regions (default: 0.1)
 
     Returns:
         matplotlib Figure
@@ -1300,7 +1366,8 @@ def plot_B1_assets_to_assets(
         debug=debug,
         xlim=xlim,
         ylim=ylim,
-        n_points=n_points
+        n_points=n_points,
+        foc_threshold=foc_threshold
     )
     return fig
 
@@ -1312,7 +1379,8 @@ def plot_all_decision_rules(
     step: Optional[int] = None,
     plots: Optional[List[str]] = None,
     show_losses: bool = True,
-    n_points: int = 100
+    n_points: int = 100,
+    foc_threshold: float = 0.1
 ) -> Dict[str, plt.Figure]:
     """
     Generate all (or selected) decision rule plots.
@@ -1325,6 +1393,7 @@ def plot_all_decision_rules(
         plots: List of plot IDs to generate (default: ["A1", "A1-1", "B1"])
         show_losses: If True, add subplots showing FOC loss residuals
         n_points: Number of grid points for evaluation
+        foc_threshold: Threshold for Labor FOC loss to mark FOC-optimal regions (default: 0.1)
 
     Returns:
         Dict mapping plot ID to Figure
@@ -1353,7 +1422,8 @@ def plot_all_decision_rules(
                 log_to_wandb=log_to_wandb,
                 step=step,
                 show_losses=show_losses,
-                n_points=n_points
+                n_points=n_points,
+                foc_threshold=foc_threshold
             )
             figures[plot_id] = fig
             plt.close(fig)
