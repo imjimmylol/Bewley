@@ -8,7 +8,7 @@ exp_name: "bewley_iq_init_incomplete_notax_high_uncer_per"
 training:
   agents: 100
   learning_rate: 1e-4
-  training_steps: 5000
+  training_steps: 10000
   batch_size: 32
   display_step: 1000
   train_step_interval: 4
@@ -87,11 +87,11 @@ shock:
 # Per config 
 prioritized_exp_replay:
   enabled: true
-  buffer_size: 100000          # Number of experiences (batches) to store
-  alpha: 0.6                   # Prioritization exponent: 0=uniform, 1=full priority
+  buffer_size: 1000000          # Number of experiences (batches) to store
+  alpha: 0.8                   # Prioritization exponent: 0=uniform, 1=full priority
   beta_start: 0.4              # Importance sampling correction start
   beta_end: 1.0                # Importance sampling correction end
-  beta_annealing_steps: 2500  # Steps to anneal beta from start to end (50% of training_steps)
+  beta_annealing_steps: 5000  # Steps to anneal beta from start to end (50% of training_steps)
   epsilon: 1e-6                # Small constant to prevent zero priority
   replay_period: 4             # K: replay every K steps (Line 7: t ≡ 0 mod K)
   gradient_steps: 1          # Number of gradient steps per repla
