@@ -1029,13 +1029,15 @@ def plot_decision_rule_with_losses(
     # ================================================================
     # Find FOC-optimal regions and shade on main plot
     # ================================================================
-    # Check where ALL curves have Labor FOC loss < threshold
+    # Check where q25~q75 curves have Labor FOC loss < threshold
+    middle_quantiles = ["q25", "median", "q75"]
     all_below_threshold = np.ones(len(x_plot), dtype=bool)
     for c_label in color_levels:
-        labor_arr = losses["labor_foc_loss"][c_label]
-        all_below_threshold &= (labor_arr < foc_threshold)
+        if c_label in middle_quantiles:
+            labor_arr = losses["labor_foc_loss"][c_label]
+            all_below_threshold &= (labor_arr < foc_threshold)
 
-    # Find contiguous regions where all losses are below threshold
+    # Find contiguous regions where q25~q75 losses are below threshold
     # and shade them on the main plot
     if np.any(all_below_threshold):
         # Find start and end indices of contiguous True regions
@@ -1048,7 +1050,7 @@ def plot_decision_rule_with_losses(
             x_end = x_plot[min(end_idx, len(x_plot) - 1)]
             # Shade the FOC-optimal region on the main plot
             ax_main.axvspan(x_start, x_end, alpha=0.15, color='green',
-                           label='FOC-optimal' if start_idx == starts[0] else None)
+                           label='FOC-optimal (q25-q75)' if start_idx == starts[0] else None)
 
         # Update legend to include FOC-optimal region
         ax_main.legend(loc='best', fontsize=9)
@@ -1243,10 +1245,13 @@ def plot_A1_1_MPS(
         ax_labor.set_title("Labor FOC Loss", fontsize=10)
 
         # Find FOC-optimal regions and shade on main plot
+        # Check where q25~q75 curves have Labor FOC loss < threshold
+        middle_quantiles = ["q25", "median", "q75"]
         all_below_threshold = np.ones(len(x_values), dtype=bool)
         for c_label in color_levels:
-            labor_arr = losses["labor_foc_loss"][c_label]
-            all_below_threshold &= (labor_arr < foc_threshold)
+            if c_label in middle_quantiles:
+                labor_arr = losses["labor_foc_loss"][c_label]
+                all_below_threshold &= (labor_arr < foc_threshold)
 
         if np.any(all_below_threshold):
             diff = np.diff(np.concatenate([[False], all_below_threshold, [False]]).astype(int))
@@ -1257,7 +1262,7 @@ def plot_A1_1_MPS(
                 x_start = x_values[start_idx]
                 x_end = x_values[min(end_idx, len(x_values) - 1)]
                 ax.axvspan(x_start, x_end, alpha=0.15, color='green',
-                          label='FOC-optimal' if start_idx == starts[0] else None)
+                          label='FOC-optimal (q25-q75)' if start_idx == starts[0] else None)
 
             ax.legend(loc='best', fontsize=10)
 
