@@ -7,6 +7,8 @@ Used by both training (train.py) and offline analysis (vis_hetero_agent.py).
 """
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy import stats
 import wandb
@@ -799,6 +801,7 @@ def plot_decision_rule(
             "step": step
         })
 
+    plt.close(fig)
     return fig
 
 
@@ -1099,6 +1102,7 @@ def plot_decision_rule_with_losses(
             "step": step
         })
 
+    plt.close(fig)
     return fig
 
 
@@ -1299,6 +1303,7 @@ def plot_A1_1_MPS(
             "step": step
         })
 
+    plt.close(fig)
     return fig
 
 
