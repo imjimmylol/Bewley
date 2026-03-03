@@ -62,16 +62,17 @@ def initialize_env_state(config, device="cpu"):
     # Use IQ-like distribution: realistic, bounded, prevents model collapse
     from src.ability_init import initialize_ability
 
+    # IQ-like distribution parameters (used for both ability init and v_bar)
+    ability_mean = getattr(config.initial_state, 'ability_mean', 1.0)
+    ability_cv = getattr(config.initial_state, 'ability_cv', 0.3)
+    ability_min = getattr(config.initial_state, 'ability_min', 0.3)
+    ability_max = getattr(config.initial_state, 'ability_max', 3.0)
+
     # Get initialization method from config (default: iq_like)
     init_method = getattr(config.initial_state, 'ability_init_method', 'iq_like')
 
     if init_method == 'iq_like':
         # Recommended: bounded log-normal like real ability distribution
-        ability_mean = getattr(config.initial_state, 'ability_mean', 1.0)
-        ability_cv = getattr(config.initial_state, 'ability_cv', 0.3)
-        ability_min = getattr(config.initial_state, 'ability_min', 0.3)
-        ability_max = getattr(config.initial_state, 'ability_max', 3.0)
-
         ability = initialize_ability(
             batch_size, n_agents,
             method='iq_like',
@@ -89,6 +90,17 @@ def initialize_env_state(config, device="cpu"):
             clip_sigma=2.0  # Clip to ±2σ to prevent explosion
         )
 
+    # Initialize heterogeneous v_bar (per-agent long-run ability mean, fixed for entire simulation)
+    # Drawn independently from same IQ-like distribution
+    v_bar_array = initialize_ability(
+        batch_size, n_agents,
+        method='iq_like',
+        mean=ability_mean,
+        cv=ability_cv,
+        min_ability=ability_min,
+        max_ability=ability_max
+    )
+
     is_superstar_vA = np.zeros((batch_size, n_agents), dtype=bool)
     is_superstar_vB = np.zeros((batch_size, n_agents), dtype=bool)
 
@@ -101,6 +113,7 @@ def initialize_env_state(config, device="cpu"):
         moneydisposable = torch.tensor(moneydisposable, dtype=torch.float32, device=device),
         savings = torch.tensor(savings, dtype=torch.float32, device=device),
         ability = torch.tensor(ability, dtype=torch.float32, device=device),
+        v_bar = torch.tensor(v_bar_array, dtype=torch.float32, device=device),
         ret = ret_tensor,
         tax_params=tax_params,
         is_superstar_vA = torch.tensor(is_superstar_vA, dtype=torch.bool, device=device),
@@ -350,7 +363,7 @@ def train(config, run):
                     save_dir=os.path.join(base_checkpoint_dir, "decision_rules"),
                     log_to_wandb=True,
                     step=step,
-                    plots=["A1", "A1-1", "B1"]
+                    plots=["A1", "A1-1", "B1", "A1-1h"]
                 )
 
         # CRITICAL: Clear temporary variables to prevent memory leaks

@@ -272,8 +272,9 @@ class EconomyEnv:
         # 5. Package into TemporaryState
         temp_state = TemporaryState(
             # Current state (before shocks)
-            savings=savings, 
+            savings=savings,
             ability=main_state.ability,
+            v_bar=main_state.v_bar,
 
             # Agent decisions
             consumption=consumption,
@@ -312,6 +313,7 @@ class EconomyEnv:
         ability_t: Tensor,
         is_superstar_t: Tensor,
         ability_history_t: Optional[Tensor],
+        v_bar: Tensor,
         branch: Literal["A", "B"],
         deterministic: bool = False,
         fix: bool = False
@@ -350,6 +352,7 @@ class EconomyEnv:
             ability_history_t=ability_history_t,
             config=self.config,
             history_length=self.history_length,
+            v_bar=v_bar,
             deterministic=deterministic
         )
 
@@ -385,6 +388,7 @@ class EconomyEnv:
             ability_t=temp_state.ability,
             is_superstar_t=is_superstar_t,
             ability_history_t=ability_history_t,
+            v_bar=temp_state.v_bar,
             branch=branch,
             deterministic=deterministic,
             fix=fix
@@ -400,6 +404,7 @@ class EconomyEnv:
             moneydisposable=temp_state.money_disposable,  # Carry forward
             savings=temp_state.savings,  # Updated savings for t+1
             ability=ability_tp1,  # Transitioned ability
+            v_bar=temp_state.v_bar,  # Fixed per-agent long-run mean (passed through)
             ret=temp_state.ret,  # Current ret becomes ret[t-1] next period
             tax_params=temp_state.tax_params,
             is_superstar=is_superstar_tp1,
@@ -458,8 +463,9 @@ class EconomyEnv:
         # No ibt in ParallelState, however it is thus more clean for commit 
         updated_parallel = ParallelState(
             moneydisposable=income_tax_outcomes["money_disposable"],
-            savings=savings, 
+            savings=savings,
             ability=parallel_state.ability,
+            v_bar=parallel_state.v_bar,
             ret=ret,
             tax_params=parallel_state.tax_params,
             is_superstar=parallel_state.is_superstar,

@@ -9,7 +9,7 @@ Implements:
 4. Ability history tracking (rolling window)
 """
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 import torch
 from torch import Tensor
 
@@ -65,7 +65,7 @@ def transition_ability(
     is_superstar_t: Tensor,
     rho_v: float,
     sigma_v: float,
-    v_bar: float,
+    v_bar: Union[float, Tensor],
     v_min: float,
     v_max: float,
     p: float,
@@ -90,7 +90,7 @@ def transition_ability(
         is_superstar_t: Current superstar status (B, A) bool
         rho_v: AR(1) persistence parameter (e.g., 0.95)
         sigma_v: Standard deviation of innovation (e.g., 0.2)
-        v_bar: Long-run mean of ability (e.g., 1.5)
+        v_bar: Long-run mean of ability — scalar or (B, A) tensor for heterogeneous agents
         v_min: Minimum ability (computed from steady state)
         v_max: Maximum ability (computed from steady state)
         p: Probability of becoming superstar
@@ -115,7 +115,10 @@ def transition_ability(
 
     # 2. AR(1) transition in log space
     # log(v[t+1]) = (1-rho)*log(v_bar) + rho*log(v[t]) + eps
-    log_v_bar = torch.log(torch.tensor(v_bar, device=device))
+    if isinstance(v_bar, Tensor):
+        log_v_bar = torch.log(v_bar.clamp(min=1e-8))  # (B, A) heterogeneous mean
+    else:
+        log_v_bar = torch.log(torch.tensor(v_bar, device=device))  # scalar fallback
     log_v_t = torch.log(ability_t.clamp(min=1e-8))  # Avoid log(0)
 
     if deterministic:
@@ -195,6 +198,7 @@ def transition_ability_with_history(
     ability_history_t: Optional[Tensor],
     config,
     history_length: int,
+    v_bar: Optional[Union[float, Tensor]] = None,
     *,
     deterministic: bool = False
 ) -> Tuple[Tensor, Tensor, Tensor]:
@@ -207,6 +211,7 @@ def transition_ability_with_history(
         ability_history_t: Current ability history (L, B, A) or None
         config: Config namespace with shock parameters (rho_v, sigma_v, v_bar, etc.)
         history_length: Maximum history length to maintain
+        v_bar: Per-agent long-run mean (B, A) tensor, or None to use config scalar
         deterministic: If True, no random shocks
 
     Returns:
@@ -218,7 +223,7 @@ def transition_ability_with_history(
     shock_params = {
         'rho_v': config.shock.rho_v,
         'sigma_v': config.shock.sigma_v,
-        'v_bar': config.shock.v_bar,
+        'v_bar': v_bar if v_bar is not None else config.shock.v_bar,
         'p': config.shock.p,
         'q': config.shock.q,
     }

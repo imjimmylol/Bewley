@@ -14,6 +14,7 @@ class TemporaryState:
     # Current state (before shocks)
     savings: Tensor              # (B, A) - current savings
     ability: Tensor              # (B, A) - current ability (before transition)
+    v_bar: Tensor                # (B, A) - per-agent long-run ability mean (fixed)
 
     # Agent decisions at time t
     consumption: Tensor          # (B, A) - consumption decision
@@ -47,6 +48,7 @@ class MainState:
     moneydisposable: Tensor
     savings: Tensor
     ability: Tensor
+    v_bar: Tensor                # (B, A) - per-agent long-run ability mean (fixed, IQ-like)
     # consumption: Tensor
     ret: Tensor
     tax_params: Tensor
@@ -70,6 +72,7 @@ class MainState:
         self.moneydisposable = d(src.moneydisposable)
         self.savings         = d(src.savings)
         self.ability         = d(src.ability)
+        self.v_bar           = d(src.v_bar)
         # self.consumption     = d(src.consumption)
         self.ret             = d(src.ret)
         self.tax_params      = d(src.tax_params)
@@ -89,6 +92,7 @@ class ParallelState:
     moneydisposable: Tensor
     savings: Tensor
     ability: Tensor
+    v_bar: Tensor                           # (B, A) per-agent long-run ability mean (fixed)
     # consumption: Tensor
     ret: Tensor
     tax_params: Tensor
@@ -109,6 +113,7 @@ def make_parallel(
         moneydisposable=main.moneydisposable,   # 本期 money 作為下輪輸入使用
         savings=main.savings,                   # 由外部後續流程更新為 t+1（這裡僅初始化）
         ability=ability_next,                   # 分支專屬
+        v_bar=main.v_bar,                       # 固定不變的 per-agent long-run mean
         # consumption=main.consumption,           # 本期消費（外部可再覆寫）
         ret=main.ret,                           # 本期 ret；外部計價後覆寫為 t 的均衡值
         tax_params=main.tax_params,             # 一般沿用

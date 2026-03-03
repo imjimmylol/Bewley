@@ -736,7 +736,8 @@ class PolicyEvaluator:
         fixed_vars: Optional[Dict[str, Union[str, float, bool]]] = None,
         n_points: int = 100,
         debug: bool = False,
-        compute_losses: bool = False
+        compute_losses: bool = False,
+        custom_color_values: Optional[Dict[str, float]] = None
     ) -> Dict[str, any]:
         """
         Evaluate policy on a synthetic grid.
@@ -752,6 +753,10 @@ class PolicyEvaluator:
             n_points: Number of grid points for x-axis
             debug: If True, print debug information
             compute_losses: If True, compute FOC loss residuals at each grid point
+            custom_color_values: Optional dict mapping color level labels to actual
+                       numeric values, e.g. {"q5": 5.2, "q25": 7.1, ...}.
+                       When provided, overrides the quantile-based color values.
+                       Requires color_var to be set.
 
         Returns:
             Dict with:
@@ -807,7 +812,11 @@ class PolicyEvaluator:
         fixed_values = self._resolve_fixed_vars(x_var, color_var, fixed_vars)
 
         # Determine color levels
-        if color_var is not None:
+        if custom_color_values is not None and color_var is not None:
+            # Use caller-provided color values (e.g., v_bar bin means)
+            color_levels = list(custom_color_values.keys())
+            color_values = list(custom_color_values.values())
+        elif color_var is not None:
             if color_var == "s_t":
                 # Discrete: just Normal and Superstar
                 color_levels = ["Normal", "Superstar"]

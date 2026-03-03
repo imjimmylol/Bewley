@@ -3,16 +3,16 @@
 # This prevents ability explosion and model collapse
 
 # Experiment name
-exp_name: "bewley_iq_init_incomplete_notax"
+exp_name: "bewley_iq_init_incomplete_notax_high_uncer"
 
 training:
   agents: 100
   learning_rate: 1e-4
-  training_steps: 5000
+  training_steps: 50000
   batch_size: 32
   display_step: 1000
   train_step_interval: 4
-  save_interval: 1000
+  save_interval: 10000
 
 bewley_model:
   theta: 1.0         # CRRA
@@ -73,7 +73,7 @@ shock:
   # NOTE: These parameters are for TRANSITIONS, not initialization
   # They still affect dynamics but bounded init prevents explosion
   rho_v: 0.98        # persistence of ability shock
-  sigma_v: 0.36      # std of ability shock
+  sigma_v: 0.2      # std of ability shock
   v_bar: 5           # long-run mean (not used with iq_init)
   p: 2.2e-6          # prob of becoming superstar
   q: 0.95            # prob of remaining superstar
