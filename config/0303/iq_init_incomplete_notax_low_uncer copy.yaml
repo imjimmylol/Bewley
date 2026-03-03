@@ -3,7 +3,7 @@
 # This prevents ability explosion and model collapse
 
 # Experiment name
-exp_name: "Bewley_Hetero_ability_high_uncer"
+exp_name: "Bewley_Hetero_ability_low_uncer"
 
 training:
   agents: 100
@@ -73,7 +73,7 @@ shock:
   # NOTE: These parameters are for TRANSITIONS, not initialization
   # They still affect dynamics but bounded init prevents explosion
   rho_v: 0.98        # persistence of ability shock
-  sigma_v: 0.5      # std of ability shock
+  sigma_v: 0.2      # std of ability shock
   v_bar: 5           # long-run mean (not used with iq_init)
   p: 2.2e-6          # prob of becoming superstar
   q: 0.95            # prob of remaining superstar
