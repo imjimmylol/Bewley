@@ -22,9 +22,9 @@ from src.train import initialize_env_state
 from src.shocks import transition_ability
 
 # ── Config ──────────────────────────────────────────────────────────────────
-CONFIG_PATH = "config/0303/iq_init_incomplete_notax_high_uncer.yaml"
+CONFIG_PATH = "config/0303/iq_init_incomplete_notax_low_uncer.yaml"
 DUMMY_LABOR = 0.5          # Fixed labor for all agents
-N_TRANSITION_STEPS = 50    # AR(1) steps to let ability diverge by v_bar
+N_TRANSITION_STEPS = 10000    # AR(1) steps to let ability diverge by v_bar
 SAVE_PATH = "test/fig_money_disposable_by_vbar.png"
 
 # ── Setup ───────────────────────────────────────────────────────────────────
