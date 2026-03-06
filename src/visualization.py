@@ -1852,12 +1852,14 @@ def plot_input_output_pairwise(
     mu: torch.Tensor,
     labor: torch.Tensor,
     normalizer,
+    per_agent_losses: Optional[Dict[str, np.ndarray]] = None,
     save_path: Optional[str] = None,
     log_to_wandb: bool = False,
     step: Optional[int] = None,
 ) -> plt.Figure:
     """
-    Plot 2x3 grid: own_money and own_ability vs each of 3 outputs.
+    Plot grid: own_money and own_ability vs each of 3 outputs.
+    Optionally adds a bottom row showing mean FOC/Euler/FB losses per quintile bin.
 
     Directly visualizes what the model sees (normalized inputs) and does (outputs).
     Primary axis: normalized scale. Secondary axis: denormalized (original) scale.
@@ -1868,6 +1870,8 @@ def plot_input_output_pairwise(
         mu: (B, A) multiplier output
         labor: (B, A) labor output
         normalizer: RunningPerAgentWelford instance for denormalization
+        per_agent_losses: Optional dict of per-agent loss arrays (flattened to N,).
+            Keys: "fb", "euler", "labor_foc". Values: np.ndarray of shape (B*A,).
         save_path: Where to save the plot
         log_to_wandb: Log to wandb
         step: Training step
@@ -1894,23 +1898,34 @@ def plot_input_output_pairwise(
         (r"$l_t$ (labor)", labor_np),
     ]
 
-    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    has_losses = per_agent_losses is not None and len(per_agent_losses) > 0
+    n_rows = 3 if has_losses else 2
 
-    for row, (x_label, x_data, mean, std) in enumerate(inputs):
-        # Color variable is the OTHER input
-        other_data = own_ability if row == 0 else own_money
+    fig, axes = plt.subplots(
+        n_rows, 3, figsize=(16, 5 * n_rows),
+        gridspec_kw={'height_ratios': [3, 3, 2] if has_losses else [1, 1]}
+    )
+
+    q_colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd"]
+    q_labels = ["Q1", "Q2", "Q3", "Q4", "Q5"]
+
+    # Compute quintile bins for both inputs (used for scatter rows and loss row)
+    # Money quintiles (used when x=ability to color, and for loss grouping col 0)
+    money_edges = np.percentile(own_money, [0, 20, 40, 60, 80, 100])
+    money_bins = np.digitize(own_money, money_edges[1:-1])
+    # Ability quintiles
+    ability_edges = np.percentile(own_ability, [0, 20, 40, 60, 80, 100])
+    ability_bins = np.digitize(own_ability, ability_edges[1:-1])
+
+    for row in range(2):
+        x_label, x_data, mean, std = inputs[row]
+        # Color by the OTHER input's quintile
+        bin_indices = ability_bins if row == 0 else money_bins
         other_label = "ability" if row == 0 else "money"
-        # Quintile bins for coloring
-        quantile_edges = np.percentile(other_data, [0, 20, 40, 60, 80, 100])
-        bin_indices = np.digitize(other_data, quantile_edges[1:-1])  # 0-4
-
-        q_colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd"]
-        q_labels = ["Q1", "Q2", "Q3", "Q4", "Q5"]
 
         for col, (y_label, y_data) in enumerate(outputs):
             ax = axes[row, col]
 
-            # Plot each quintile
             for qi in range(5):
                 mask = bin_indices == qi
                 if mask.sum() == 0:
@@ -1933,8 +1948,39 @@ def plot_input_output_pairwise(
             ax2.set_xlabel("original scale", fontsize=7, color='gray')
             ax2.tick_params(labelsize=7, colors='gray')
 
-        # Legend only on first column
         axes[row, 0].legend(fontsize=7, markerscale=3, loc='best')
+
+    # ---- Row 3: Mean losses per quintile bin ----
+    if has_losses:
+        loss_names = list(per_agent_losses.keys())
+        # Group by ability quintile (agent "type")
+        for col, loss_name in enumerate(loss_names[:3]):
+            ax = axes[2, col]
+            loss_vals = per_agent_losses[loss_name]
+
+            means_per_q = []
+            for qi in range(5):
+                mask = ability_bins == qi
+                if mask.sum() > 0:
+                    means_per_q.append(np.mean(np.abs(loss_vals[mask])))
+                else:
+                    means_per_q.append(0.0)
+
+            bars = ax.bar(q_labels, means_per_q, color=q_colors, alpha=0.8)
+            ax.set_ylabel(f"Mean |{loss_name}|", fontsize=9)
+            ax.set_xlabel("Ability quintile", fontsize=9)
+            ax.set_title(f"{loss_name} by agent type", fontsize=10)
+            ax.grid(True, alpha=0.3, axis='y')
+
+            # Annotate bar values
+            for bar, val in zip(bars, means_per_q):
+                if val > 0:
+                    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                            f"{val:.4f}", ha='center', va='bottom', fontsize=7)
+
+        # If fewer than 3 loss types, hide extra axes
+        for col in range(len(loss_names), 3):
+            axes[2, col].set_visible(False)
 
     title = "Direct Input-Output: Own Features vs Decisions"
     if step is not None:

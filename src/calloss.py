@@ -159,6 +159,7 @@ class FBLoss:
         self,
         savings_ratio: Tensor,
         mu: Tensor,
+        reduce: bool = True,
     ) -> Tensor:
         """
         Compute FB loss.
@@ -166,15 +167,16 @@ class FBLoss:
         Args:
             savings_ratio: (B, A) - fraction saved
             mu: (B, A) - Lagrange multiplier
-            money_disposable: (B, A) - disposable money
+            reduce: If True, return scalar mean. If False, return per-agent (B, A).
 
         Returns:
-            loss: scalar
+            loss: scalar or (B, A) tensor
         """
         r1 = savings_ratio
         r2 = (1-mu)
 
-        return torch.mean((r1+r2-torch.sqrt(r1**2+r2**2))**2)
+        per_agent = (r1+r2-torch.sqrt(r1**2+r2**2))**2
+        return torch.mean(per_agent) if reduce else per_agent
 
 class AuxLossMu:
     def __init__(self, taxparams: Namespace, theta: float, beta: float = 1.0,
@@ -204,7 +206,7 @@ class AuxLossMu:
         eulerloss = mu0-term1*(term2+term3)
         return eulerloss
 
-    def __call__(self, c0, mu0, ret0, savings_tp, c1_A, c1_B, ibt_A, ibt_B):
+    def __call__(self, c0, mu0, ret0, savings_tp, c1_A, c1_B, ibt_A, ibt_B, reduce: bool = True):
 
         eulerloss_A = self.eulerloss(c0=c0, c1=c1_A, mu0=mu0, ret0=ret0, ibt_parallel=ibt_A,
                                      savings_tp=savings_tp)
@@ -214,7 +216,8 @@ class AuxLossMu:
         eulerloss_A = torch.nan_to_num(eulerloss_A, nan=0.0, posinf=1e6, neginf=-1e6)
         eulerloss_B = torch.nan_to_num(eulerloss_B, nan=0.0, posinf=1e6, neginf=-1e6)
 
-        return torch.mean(eulerloss_A * eulerloss_B)
+        per_agent = eulerloss_A * eulerloss_B
+        return torch.mean(per_agent) if reduce else per_agent
 
 class LaborFOCLoss:
     """
@@ -246,6 +249,7 @@ class LaborFOCLoss:
         wage: Tensor,
         ability: Tensor,
         labor: Tensor,
+        reduce: bool = True,
     ) -> Tensor:
         """
         Compute labor FOC loss.
@@ -255,9 +259,10 @@ class LaborFOCLoss:
             labor: (B, A)
             wage: (B, A)
             ability: (B, A)
+            reduce: If True, return scalar mean. If False, return per-agent (B, A).
 
         Returns:
-            loss: scalar
+            loss: scalar or (B, A) tensor
         """
         labor_term = -self._safe_pow(labor, self.gamma)
         cons_term = self._safe_pow(consumption, -self.theta) / (1.0 + self.taxparams.tax_saving)  # FIXED: Removed negative sign
@@ -268,6 +273,6 @@ class LaborFOCLoss:
         # --- clean up NaN / Inf ---
         loss_foc = torch.nan_to_num(loss_foc, nan=0.0, posinf=self.clip_val, neginf=-self.clip_val)
 
-        # CRITICAL: Return scalar by taking mean
-        return torch.mean(loss_foc ** 2)
+        per_agent = loss_foc ** 2
+        return torch.mean(per_agent) if reduce else per_agent
 

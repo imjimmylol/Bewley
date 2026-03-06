@@ -379,8 +379,31 @@ def train(config, run):
                 mu_snap = F.softplus(out_snap[..., 1]) + 1e-6
                 labor_snap = torch.sigmoid(out_snap[..., 2]) * 0.98 + 0.01
 
+                # Compute per-agent losses (reduce=False) using existing loss classes
+                fb_per_agent = loss_calculator.fb_loss_fn(
+                    savings_ratio=savings_ratio_t, mu=mu_t, reduce=False
+                ).detach()
+                euler_per_agent = loss_calculator.aux_loss_mu_fn(
+                    c0=consumption_t, mu0=mu_t, ret0=ret_t,
+                    savings_tp=savings_ratio_t * money_disposable_t,
+                    c1_A=consumption_A_tp1, c1_B=consumption_B_tp1,
+                    ibt_A=income_before_tax_A_tp1, ibt_B=income_before_tax_B_tp1,
+                    reduce=False
+                ).detach()
+                labor_foc_per_agent = loss_calculator.labor_loss_fn(
+                    consumption=consumption_t, ibt=ibt, wage=wage_t,
+                    ability=ability_t, labor=labor_t, reduce=False
+                ).detach()
+
+            per_agent_losses = {
+                "FB": fb_per_agent.cpu().numpy().flatten(),
+                "Euler": euler_per_agent.cpu().numpy().flatten(),
+                "Labor FOC": labor_foc_per_agent.cpu().numpy().flatten(),
+            }
+
             plot_input_output_pairwise(
                 features_snap, zeta_snap, mu_snap, labor_snap, normalizer,
+                per_agent_losses=per_agent_losses,
                 save_path=os.path.join(base_checkpoint_dir, f"input_output_pairwise_step_{step}.png"),
                 log_to_wandb=True, step=step
             )
