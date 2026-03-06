@@ -4,6 +4,7 @@ import wandb
 from datetime import datetime
 from tqdm import tqdm
 import torch
+import torch.nn.functional as F
 from src.env_state import MainState
 from src.environment import EconomyEnv
 from src.normalizer import RunningPerAgentWelford
@@ -15,7 +16,9 @@ from src.visualization import (
     plot_decision_rules_scatter,
     plot_binned_decision_rules,
     plot_state_distributions,
-    plot_all_decision_rules
+    plot_all_decision_rules,
+    plot_input_output_pairwise,
+    plot_input_output_pca
 )
 from src.policy_evaluation import (
     HistoricalRanges,
@@ -366,6 +369,26 @@ def train(config, run):
                     plots=["A1", "A1-1", "B1", "A1-1h", "H1", "H1-h"],  # Specify which plots to generate
                     v_bar=main_state.v_bar.detach().cpu().numpy().flatten()
                 )
+
+            # ==== Direct Input-Output Visualization ====
+            print(f"Generating direct input-output plots...")
+            with torch.no_grad():
+                features_snap, condi_snap = env._prepare_features(main_state, update_normalizer=False)
+                out_snap = policy_net(features_snap, condi_snap)
+                zeta_snap = torch.sigmoid(out_snap[..., 0]) * 0.98 + 0.01
+                mu_snap = F.softplus(out_snap[..., 1]) + 1e-6
+                labor_snap = torch.sigmoid(out_snap[..., 2]) * 0.98 + 0.01
+
+            plot_input_output_pairwise(
+                features_snap, zeta_snap, mu_snap, labor_snap, normalizer,
+                save_path=os.path.join(base_checkpoint_dir, f"input_output_pairwise_step_{step}.png"),
+                log_to_wandb=True, step=step
+            )
+            plot_input_output_pca(
+                features_snap, zeta_snap, mu_snap, labor_snap,
+                save_path=os.path.join(base_checkpoint_dir, f"input_output_pca_step_{step}.png"),
+                log_to_wandb=True, step=step
+            )
 
         # CRITICAL: Clear temporary variables to prevent memory leaks
         # Delete tensors that have computational graphs attached

@@ -1828,6 +1828,224 @@ def plot_A1_1_MPS_hetero(
     return fig
 
 
+# =============================================================================
+# Direct Input-Output Visualization (no synthetic grid)
+# =============================================================================
+
+def _get_normalizer_stats(normalizer, key):
+    """Extract mean and std from normalizer for denormalization."""
+    if key not in normalizer._stats:
+        return 0.0, 1.0
+    stats = normalizer._stats[key]
+    mean = stats.mean.detach().cpu().numpy()
+    var = stats.M2 / torch.clamp(stats.count - 1.0, min=1.0)
+    std = torch.sqrt(torch.clamp(var, min=0.0) + normalizer.eps)
+    std = torch.clamp(std, min=normalizer.min_std)
+    std = std.detach().cpu().numpy()
+    # For global mode, mean/std are scalars or 1D
+    return float(mean.flat[0]) if mean.size > 0 else 0.0, float(std.flat[0]) if std.size > 0 else 1.0
+
+
+def plot_input_output_pairwise(
+    features: torch.Tensor,
+    zeta: torch.Tensor,
+    mu: torch.Tensor,
+    labor: torch.Tensor,
+    normalizer,
+    save_path: Optional[str] = None,
+    log_to_wandb: bool = False,
+    step: Optional[int] = None,
+) -> plt.Figure:
+    """
+    Plot 2x3 grid: own_money and own_ability vs each of 3 outputs.
+
+    Directly visualizes what the model sees (normalized inputs) and does (outputs).
+    Primary axis: normalized scale. Secondary axis: denormalized (original) scale.
+
+    Args:
+        features: (B, A, 2A+2) normalized feature tensor from build_inputs
+        zeta: (B, A) savings ratio output
+        mu: (B, A) multiplier output
+        labor: (B, A) labor output
+        normalizer: RunningPerAgentWelford instance for denormalization
+        save_path: Where to save the plot
+        log_to_wandb: Log to wandb
+        step: Training step
+    """
+    # Extract own features (last 2 dims)
+    own_money = features[..., -2].detach().cpu().numpy().flatten()
+    own_ability = features[..., -1].detach().cpu().numpy().flatten()
+
+    zeta_np = zeta.detach().cpu().numpy().flatten()
+    mu_np = mu.detach().cpu().numpy().flatten()
+    labor_np = labor.detach().cpu().numpy().flatten()
+
+    # Get normalizer stats for denormalization
+    mean_m, std_m = _get_normalizer_stats(normalizer, "moneydisposalbe")
+    mean_v, std_v = _get_normalizer_stats(normalizer, "ability")
+
+    inputs = [
+        ("Own Money (normalized)", own_money, mean_m, std_m),
+        ("Own Ability (normalized)", own_ability, mean_v, std_v),
+    ]
+    outputs = [
+        (r"$\zeta_t$ (savings ratio)", zeta_np),
+        (r"$\mu_t$ (multiplier)", mu_np),
+        (r"$l_t$ (labor)", labor_np),
+    ]
+
+    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+
+    for row, (x_label, x_data, mean, std) in enumerate(inputs):
+        # Color variable is the OTHER input
+        other_data = own_ability if row == 0 else own_money
+        other_label = "ability" if row == 0 else "money"
+        # Quintile bins for coloring
+        quantile_edges = np.percentile(other_data, [0, 20, 40, 60, 80, 100])
+        bin_indices = np.digitize(other_data, quantile_edges[1:-1])  # 0-4
+
+        q_colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd"]
+        q_labels = ["Q1", "Q2", "Q3", "Q4", "Q5"]
+
+        for col, (y_label, y_data) in enumerate(outputs):
+            ax = axes[row, col]
+
+            # Plot each quintile
+            for qi in range(5):
+                mask = bin_indices == qi
+                if mask.sum() == 0:
+                    continue
+                ax.scatter(
+                    x_data[mask], y_data[mask],
+                    c=q_colors[qi], alpha=0.15, s=3, rasterized=True,
+                    label=f"{other_label} {q_labels[qi]}" if col == 0 else None
+                )
+
+            ax.set_xlabel(x_label, fontsize=9)
+            ax.set_ylabel(y_label, fontsize=9)
+            ax.grid(True, alpha=0.3)
+
+            # Secondary x-axis with denormalized scale
+            ax2 = ax.secondary_xaxis('top', functions=(
+                lambda x, m=mean, s=std: x * s + m,
+                lambda x, m=mean, s=std: (x - m) / s
+            ))
+            ax2.set_xlabel("original scale", fontsize=7, color='gray')
+            ax2.tick_params(labelsize=7, colors='gray')
+
+        # Legend only on first column
+        axes[row, 0].legend(fontsize=7, markerscale=3, loc='best')
+
+    title = "Direct Input-Output: Own Features vs Decisions"
+    if step is not None:
+        title += f" (step {step})"
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+
+    if log_to_wandb and wandb.run:
+        wandb.log({
+            "input_output/pairwise": wandb.Image(fig),
+            "step": step
+        })
+
+    plt.close(fig)
+    return fig
+
+
+def plot_input_output_pca(
+    features: torch.Tensor,
+    zeta: torch.Tensor,
+    mu: torch.Tensor,
+    labor: torch.Tensor,
+    save_path: Optional[str] = None,
+    log_to_wandb: bool = False,
+    step: Optional[int] = None,
+) -> plt.Figure:
+    """
+    PCA on full input feature space, colored by each output.
+
+    Args:
+        features: (B, A, 2A+2) feature tensor
+        zeta, mu, labor: (B, A) output tensors
+        save_path: Where to save
+        log_to_wandb: Log to wandb
+        step: Training step
+    """
+    # Flatten to (N, D)
+    feat_np = features.detach().cpu().numpy()
+    N_total = feat_np.shape[0] * feat_np.shape[1]
+    D = feat_np.shape[2]
+    X = feat_np.reshape(N_total, D)
+
+    # PCA via SVD
+    X_centered = X - X.mean(axis=0, keepdims=True)
+    U, S, Vt = np.linalg.svd(X_centered, full_matrices=False)
+    pc_scores = X_centered @ Vt[:2].T  # (N, 2)
+    var_explained = S[:2] ** 2 / (S ** 2).sum()
+
+    outputs = [
+        (r"$\zeta_t$", zeta.detach().cpu().numpy().flatten()),
+        (r"$\mu_t$", mu.detach().cpu().numpy().flatten()),
+        (r"$l_t$", labor.detach().cpu().numpy().flatten()),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    for i, (label, values) in enumerate(outputs):
+        ax = axes[i]
+        sc = ax.scatter(
+            pc_scores[:, 0], pc_scores[:, 1],
+            c=values, cmap='viridis', alpha=0.3, s=3, rasterized=True
+        )
+        plt.colorbar(sc, ax=ax, label=label)
+        ax.set_xlabel(f"PC1 ({var_explained[0]:.1%} var)", fontsize=10)
+        ax.set_ylabel(f"PC2 ({var_explained[1]:.1%} var)", fontsize=10)
+        ax.set_title(f"Color: {label}", fontsize=11)
+        ax.grid(True, alpha=0.3)
+
+        # Annotate top loadings for PC1 and PC2
+        n_agents = (D - 2) // 2
+        feature_names = (
+            [f"m_{j}" for j in range(n_agents)]
+            + [f"v_{j}" for j in range(n_agents)]
+            + ["own_m", "own_v"]
+        )
+        if i == 0:  # Only annotate on first subplot
+            for pc_idx in range(2):
+                loadings = Vt[pc_idx]
+                top_k = np.argsort(np.abs(loadings))[-3:]  # top 3
+                info = ", ".join(
+                    f"{feature_names[k]}:{loadings[k]:+.2f}" for k in top_k
+                )
+                ax.text(
+                    0.02, 0.98 - pc_idx * 0.06, f"PC{pc_idx+1}: {info}",
+                    transform=ax.transAxes, fontsize=6,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+                )
+
+    title = "PCA of Full Input Space"
+    if step is not None:
+        title += f" (step {step})"
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+
+    if log_to_wandb and wandb.run:
+        wandb.log({
+            "input_output/pca": wandb.Image(fig),
+            "step": step
+        })
+
+    plt.close(fig)
+    return fig
+
+
 def plot_all_decision_rules(
     evaluator,
     save_dir: str,
