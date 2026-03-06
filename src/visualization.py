@@ -1102,6 +1102,222 @@ def plot_decision_rule_with_losses(
     return fig
 
 
+def plot_H1_resources_to_labor(
+    evaluator,
+    color_var: str = "v_t",
+    save_path: Optional[str] = None,
+    log_to_wandb: bool = False,
+    step: Optional[int] = None,
+    debug: bool = False,
+    xlim: Optional[tuple] = None,
+    ylim: Optional[tuple] = None,
+    show_losses: bool = True,
+    n_points: int = 100,
+    foc_threshold: float = 0.1
+) -> plt.Figure:
+    """
+    Plot H1: m_t -> l_t (Resources to Labor)
+
+    Shows how agents choose labor supply across different ability levels.
+    """
+    if not show_losses:
+        fig = plot_decision_rule(
+            evaluator=evaluator,
+            x_var="m_t",
+            y_var="l_t",
+            color_var=color_var,
+            use_log1p_x=True,
+            ref_lines=[],
+            title=r"H1: $m_t \rightarrow l_t$ (Resources to Labor)",
+            save_path=save_path,
+            log_to_wandb=log_to_wandb,
+            step=step,
+            debug=debug,
+            xlim=xlim,
+            ylim=ylim,
+            n_points=n_points
+        )
+        return fig
+
+    fig = plot_decision_rule_with_losses(
+        evaluator=evaluator,
+        x_var="m_t",
+        y_var="l_t",
+        color_var=color_var,
+        use_log1p_x=True,
+        title=r"H1: $m_t \rightarrow l_t$ with FOC Losses",
+        save_path=save_path,
+        log_to_wandb=log_to_wandb,
+        step=step,
+        debug=debug,
+        xlim=xlim,
+        ylim=ylim,
+        n_points=n_points,
+        foc_threshold=foc_threshold
+    )
+    return fig
+
+
+def plot_H1_labor_hetero(
+    evaluator,
+    v_bar: np.ndarray,
+    save_path: Optional[str] = None,
+    log_to_wandb: bool = False,
+    step: Optional[int] = None,
+    debug: bool = False,
+    xlim: Optional[tuple] = None,
+    ylim: Optional[tuple] = None,
+    n_points: int = 100,
+    show_losses: bool = True,
+    foc_threshold: float = 0.1
+) -> plt.Figure:
+    """
+    Plot H1-h: Labor using heterogeneous representative agents grouped by v_bar.
+
+    Each colored line represents a different agent "type" based on their
+    permanent ability (v_bar bin mean).
+    """
+    bin_means = compute_vbar_bin_means(v_bar)
+
+    if debug:
+        print("Hetero agent v_bar bin means (H1-h):")
+        for label, val in bin_means.items():
+            print(f"  {label}: {val:.4f}")
+
+    results = evaluator.evaluate_on_grid(
+        x_var="m_t",
+        y_var="l_t",
+        color_var="v_t",
+        n_points=n_points,
+        debug=debug,
+        compute_losses=show_losses,
+        custom_color_values=bin_means
+    )
+
+    x_values = results["x_values"]
+    y_values = results["y_values"]
+    color_levels = results["color_levels"]
+    color_values = results["color_values"]
+    fixed_values = results["fixed_values"]
+    losses = results.get("losses", None) if show_losses else None
+
+    # Create figure
+    if show_losses and losses is not None:
+        fig, axes = plt.subplots(4, 1, figsize=(10, 14), sharex=True,
+                                  gridspec_kw={'height_ratios': [3, 1, 1, 1]})
+        ax = axes[0]
+    else:
+        fig, ax = plt.subplots(figsize=(10, 7))
+
+    # Plot labor for each color level
+    for c_label, c_val in zip(color_levels, color_values):
+        y_arr = y_values[c_label]
+        color = QUANTILE_COLORS.get(c_label, "#333333")
+        legend_label = f"v\u0304 bin {c_label} (mean={c_val:.2f})"
+        ax.plot(x_values, y_arr, color=color, linewidth=2, label=legend_label)
+
+    # Labels and title
+    if not (show_losses and losses is not None):
+        ax.set_xlabel(_format_axis_label("m_t"), fontsize=12)
+    ax.set_ylabel(_format_axis_label("l_t"), fontsize=12)
+    ax.set_title(r"H1-h: Labor (Hetero Agents by $\bar{v}$ Bin Mean)", fontsize=14, fontweight='bold')
+
+    # Fixed variables info
+    fixed_str = ", ".join([
+        f"{k}={v:.2f}" if isinstance(v, (int, float)) else f"{k}={v}"
+        for k, v in fixed_values.items()
+    ])
+    ax.text(0.02, 0.98, f"Fixed: {fixed_str}", transform=ax.transAxes,
+            fontsize=9, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    ax.legend(loc='best', fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    # Add loss subplots if requested
+    if show_losses and losses is not None:
+        ax_fb = axes[1]
+        for c_label in color_levels:
+            fb_arr = losses["fb_loss"][c_label]
+            fb_arr_plot = np.maximum(fb_arr, 1e-10)
+            color = QUANTILE_COLORS.get(c_label, "#333333")
+            ax_fb.plot(x_values, fb_arr_plot, color=color, linewidth=1.5, alpha=0.8)
+        ax_fb.set_ylabel("FB Loss", fontsize=10)
+        ax_fb.set_yscale('log')
+        ax_fb.grid(True, alpha=0.3)
+        ax_fb.set_title("FB Loss (Complementary Slackness)", fontsize=10)
+
+        ax_labor = axes[2]
+        for c_label in color_levels:
+            labor_arr = losses["labor_foc_loss"][c_label]
+            labor_arr_plot = np.maximum(labor_arr, 1e-10)
+            color = QUANTILE_COLORS.get(c_label, "#333333")
+            ax_labor.plot(x_values, labor_arr_plot, color=color, linewidth=1.5, alpha=0.8)
+        ax_labor.axhline(y=foc_threshold, color='black', linestyle='--', linewidth=1.5,
+                         alpha=0.7, label=f'threshold={foc_threshold:.0e}')
+        ax_labor.legend(loc='upper right', fontsize=8)
+        ax_labor.set_ylabel("Labor FOC", fontsize=10)
+        ax_labor.set_yscale('log')
+        ax_labor.grid(True, alpha=0.3)
+        ax_labor.set_title("Labor FOC Loss", fontsize=10)
+
+        # FOC-optimal shading on main plot
+        middle_quantiles = ["q25", "q50", "q75"]
+        all_below_threshold = np.ones(len(x_values), dtype=bool)
+        for c_label in color_levels:
+            if c_label in middle_quantiles:
+                labor_arr = losses["labor_foc_loss"][c_label]
+                all_below_threshold &= (labor_arr < foc_threshold)
+
+        if np.any(all_below_threshold):
+            diff = np.diff(np.concatenate([[False], all_below_threshold, [False]]).astype(int))
+            starts = np.where(diff == 1)[0]
+            ends = np.where(diff == -1)[0]
+            for start_idx, end_idx in zip(starts, ends):
+                x_start = x_values[start_idx]
+                x_end = x_values[min(end_idx, len(x_values) - 1)]
+                ax.axvspan(x_start, x_end, alpha=0.15, color='green',
+                          label='FOC-optimal (q25-q75)' if start_idx == starts[0] else None)
+            ax.legend(loc='best', fontsize=10)
+
+        ax_aux = axes[3]
+        has_nonzero_aux = False
+        for c_label in color_levels:
+            aux_arr = losses["aux_loss"][c_label]
+            if np.any(aux_arr > 1e-10):
+                has_nonzero_aux = True
+            aux_arr_plot = np.maximum(aux_arr, 1e-10)
+            color = QUANTILE_COLORS.get(c_label, "#333333")
+            ax_aux.plot(x_values, aux_arr_plot, color=color, linewidth=1.5, alpha=0.8)
+        ax_aux.set_ylabel("Aux Loss", fontsize=10)
+        ax_aux.set_xlabel(_format_axis_label("m_t"), fontsize=12)
+        ax_aux.grid(True, alpha=0.3)
+        if has_nonzero_aux:
+            ax_aux.set_yscale('log')
+            ax_aux.set_title("Aux Loss (Euler Equation)", fontsize=10)
+        else:
+            ax_aux.set_title("Aux Loss (Euler Equation) - Not Computed", fontsize=10)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Labor hetero plot saved to: {save_path}")
+
+    if log_to_wandb and wandb.run:
+        wandb.log({
+            "decision_rules/H1_labor_hetero": wandb.Image(fig),
+            "step": step
+        })
+
+    return fig
+
+
 def plot_A1_1_MPS(
     evaluator,
     color_var: str = "v_t",
@@ -1644,27 +1860,33 @@ def plot_all_decision_rules(
     os.makedirs(save_dir, exist_ok=True)
 
     if plots is None:
-        plots = ["A1", "A1-1", "B1", "A1-1h"]  # Include hetero MPS plot by default
+        plots = ["A1", "A1-1", "B1", "A1-1h", "H1", "H1-h"]
 
     figures = {}
 
-    # Standard plots (same signature)
+    # Standard plots (same signature - no v_bar needed)
     plot_funcs = {
         "A1": plot_A1_resources_to_assets,
         "A1-1": plot_A1_1_MPS,
-        "A1-1h": plot_A1_1_MPS_hetero,  # Special case - needs v_bar
         "B1": plot_B1_assets_to_assets,
+        "H1": plot_H1_resources_to_labor,
+    }
+
+    # Hetero plots (need v_bar)
+    hetero_plot_funcs = {
+        "A1-1h": plot_A1_1_MPS_hetero,
+        "H1-h": plot_H1_labor_hetero,
     }
 
     for plot_id in plots:
-        # Handle hetero agent plot separately (needs v_bar)
-        if plot_id == "A1-1h":
+        # Handle hetero agent plots separately (need v_bar)
+        if plot_id in hetero_plot_funcs:
             if v_bar is None:
                 print(f"Warning: Skipping {plot_id} — v_bar data not provided")
                 continue
             suffix = "_with_losses" if show_losses else ""
             save_path = os.path.join(save_dir, f"fig_{plot_id}{suffix}_step_{step}.png") if step else os.path.join(save_dir, f"fig_{plot_id}{suffix}.png")
-            fig = plot_A1_1_MPS_hetero(
+            fig = hetero_plot_funcs[plot_id](
                 evaluator=evaluator,
                 v_bar=v_bar,
                 save_path=save_path,

@@ -363,7 +363,7 @@ def train(config, run):
                     save_dir=os.path.join(base_checkpoint_dir, "decision_rules"),
                     log_to_wandb=True,
                     step=step,
-                    plots=["A1", "A1-1", "B1", "A1-1h"],
+                    plots=["A1", "A1-1", "B1", "A1-1h", "H1", "H1-h"],  # Specify which plots to generate
                     v_bar=main_state.v_bar.detach().cpu().numpy().flatten()
                 )
 
