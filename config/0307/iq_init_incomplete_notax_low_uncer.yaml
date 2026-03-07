@@ -8,16 +8,16 @@ exp_name: "Bewley_Hetero_ability_low_uncer"
 training:
   agents: 100
   learning_rate: 1e-4
-  training_steps: 50000
+  training_steps: 20000
   batch_size: 32
   display_step: 5000
   train_step_interval: 4
-  save_interval: 10000
+  save_interval: 5000
 
 bewley_model:
   theta: 1.0         # CRRA
   beta: 0.96         # Discount factor
-  A: 1.0             # Technology parameter
+  A: 50.0             # Technology parameter
   alpha: 0.33        # Capital share of income
   gamma: 2.0         # Inverse Frisch elasticity
   r: 0.04            # Interest rate (return to savings)
