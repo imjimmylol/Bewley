@@ -43,6 +43,9 @@ QUANTILE_COLORS = {
 
 # Run colors for overlay mode
 RUN_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b"]
+RUN_MARKERS = ["o", "^", "s", "D", "v", "P"]
+Q_COLORS = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd"]
+Q_LABELS = ["Q1", "Q2", "Q3", "Q4", "Q5"]
 RUN_LINESTYLES = ["-", "--", ":", "-."]
 
 # Plot ID to reference line mapping
@@ -247,8 +250,9 @@ def plot_io_comparison(
 ) -> plt.Figure:
     """
     Compare input-output pairwise data across runs.
-    Overlay runs on the same subplots.
+    Overlay runs on the same subplots with quintile coloring by agent type.
     Grid: rows = (money, ability) × columns = (zeta, mu, labor).
+    Each run uses a different marker shape; colors indicate quintile of the OTHER input.
     """
     inputs = ["own_money", "own_ability"]
     input_labels = ["Own Money (normalized)", "Own Ability (normalized)"]
@@ -258,23 +262,43 @@ def plot_io_comparison(
     fig, axes = plt.subplots(2, 3, figsize=(16, 10), squeeze=False)
 
     for row, (inp, inp_label) in enumerate(zip(inputs, input_labels)):
+        # Color by the OTHER input's quintile (same as original plot)
+        other_inp = "own_ability" if row == 0 else "own_money"
+        other_label = "ability" if row == 0 else "money"
+
         for col, (out_key, out_label) in enumerate(zip(outputs, output_labels)):
             ax = axes[row, col]
 
             for i, data in enumerate(datasets):
                 x = data[inp]
                 y = data[out_key]
-                color = RUN_COLORS[i % len(RUN_COLORS)]
-                label = data["exp_name"]
-                ax.scatter(x, y, c=color, alpha=0.12, s=2, rasterized=True,
-                           label=label if (row == 0 and col == 0) else None)
+                marker = RUN_MARKERS[i % len(RUN_MARKERS)]
+
+                # Compute quintile bins for the OTHER input
+                other_data = data[other_inp]
+                edges = np.percentile(other_data, [0, 20, 40, 60, 80, 100])
+                bins = np.digitize(other_data, edges[1:-1])
+
+                for qi in range(5):
+                    mask = bins == qi
+                    if mask.sum() == 0:
+                        continue
+                    # Legend: show run name + quintile only in first subplot
+                    label = None
+                    if row == 0 and col == 0:
+                        label = f"{data['exp_name']} {other_label} {Q_LABELS[qi]}"
+                    ax.scatter(
+                        x[mask], y[mask],
+                        c=Q_COLORS[qi], marker=marker,
+                        alpha=0.08, s=2, rasterized=True,
+                        label=label,
+                    )
 
             ax.set_xlabel(inp_label, fontsize=9)
             ax.set_ylabel(out_label, fontsize=9)
             ax.grid(True, alpha=0.3)
 
-    # Single legend on the first subplot
-    axes[0, 0].legend(fontsize=8, markerscale=5, loc="best")
+    axes[0, 0].legend(fontsize=6, markerscale=5, loc="best", ncol=len(datasets))
 
     fig.suptitle("Input-Output Comparison (overlaid)", fontsize=14, fontweight="bold")
     plt.tight_layout()
