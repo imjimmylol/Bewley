@@ -280,7 +280,7 @@ def plot_io_comparison(
                 bins = np.digitize(other_data, edges[1:-1])
 
                 # First run more opaque, subsequent runs more transparent
-                alpha = 0.15 if i == 0 else 0.06
+                alpha = 0.8 if i == 0 else 0.06
 
                 for qi in range(5):
                     mask = bins == qi
