@@ -160,8 +160,9 @@ class TrainingMonitor:
         """
         metrics = {}
 
-        # Money statistics from normalizer
-        if "moneydisposalbe" in self.normalizer._stats:  # Note: typo in key from environment.py
+        # Money statistics from normalizer (only available for Welford normalizer)
+        has_welford_stats = hasattr(self.normalizer, '_stats')
+        if has_welford_stats and "moneydisposalbe" in self.normalizer._stats:
             money_norm_stats = self.normalizer._stats["moneydisposalbe"]
             money_norm_mean = money_norm_stats.mean.mean().item()
             money_norm_std = torch.sqrt(
@@ -174,7 +175,7 @@ class TrainingMonitor:
             money_norm_count = 0.0
 
         # Ability statistics from normalizer
-        if "ability" in self.normalizer._stats:
+        if has_welford_stats and "ability" in self.normalizer._stats:
             ability_norm_stats = self.normalizer._stats["ability"]
             ability_norm_mean = ability_norm_stats.mean.mean().item()
             ability_norm_std = torch.sqrt(

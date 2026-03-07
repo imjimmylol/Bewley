@@ -352,3 +352,133 @@ class RunningPerAgentWelford:
         # var = M2 / (n - 1)
         var = s.M2 / torch.clamp(s.count - 1.0, min=1.0)
         return s.mean, var
+
+
+class HardNormalizer:
+    """
+    Hard normalization: maps values to [0, 1] using fixed or tracked bounds.
+
+    Two modes per variable:
+    - Fixed bounds: provide (min, max) at init time (e.g., ability with known [v_min, v_max])
+    - Running bounds: track running min/max during training (e.g., money_disposable)
+
+    Same `transform()` interface as RunningPerAgentWelford for drop-in replacement.
+    """
+
+    def __init__(self, fixed_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+                 clip: bool = True):
+        """
+        Args:
+            fixed_bounds: Dict mapping variable name to (min, max) for fixed-bound variables.
+                          e.g., {"ability": (0.3, 3.0)}
+            clip: Whether to clamp output to [0, 1] (True) or allow extrapolation (False)
+        """
+        self.fixed_bounds: Dict[str, Tuple[float, float]] = fixed_bounds or {}
+        self.clip = clip
+        # Running bounds for variables without fixed bounds
+        self._running_min: Dict[str, Tensor] = {}
+        self._running_max: Dict[str, Tensor] = {}
+        self._initialized: Dict[str, bool] = {}
+
+    def transform(self, name: str, x: Tensor, *, update: bool) -> Tensor:
+        """
+        Normalize x to [0, 1].
+
+        Args:
+            x: Input tensor (any shape)
+            update: Whether to update running bounds (ignored for fixed-bound variables)
+
+        Returns:
+            Normalized tensor in [0, 1]
+        """
+        if name in self.fixed_bounds:
+            lo, hi = self.fixed_bounds[name]
+            lo_t = torch.tensor(lo, device=x.device, dtype=x.dtype)
+            hi_t = torch.tensor(hi, device=x.device, dtype=x.dtype)
+        else:
+            # Running bounds mode
+            if update:
+                self._update_running(name, x)
+
+            if name not in self._initialized or not self._initialized[name]:
+                # Not yet initialized — return zeros (safe default)
+                return torch.zeros_like(x)
+
+            lo_t = self._running_min[name].to(device=x.device, dtype=x.dtype)
+            hi_t = self._running_max[name].to(device=x.device, dtype=x.dtype)
+
+        denom = hi_t - lo_t
+        denom = torch.clamp(denom, min=1e-8)  # prevent division by zero
+        y = (x - lo_t) / denom
+
+        if self.clip:
+            y = torch.clamp(y, 0.0, 1.0)
+
+        return y
+
+    def _update_running(self, name: str, x: Tensor) -> None:
+        x_det = x.detach()
+        batch_min = x_det.min()
+        batch_max = x_det.max()
+
+        if name not in self._initialized or not self._initialized[name]:
+            self._running_min[name] = batch_min.clone()
+            self._running_max[name] = batch_max.clone()
+            self._initialized[name] = True
+        else:
+            self._running_min[name] = torch.min(self._running_min[name], batch_min)
+            self._running_max[name] = torch.max(self._running_max[name], batch_max)
+
+    def state_dict(self) -> Dict[str, Tensor]:
+        out: Dict[str, Tensor] = {}
+        # Save fixed bounds
+        for name, (lo, hi) in self.fixed_bounds.items():
+            out[f"fixed.{name}.lo"] = torch.tensor(lo)
+            out[f"fixed.{name}.hi"] = torch.tensor(hi)
+        # Save running bounds
+        for name in self._running_min:
+            out[f"running.{name}.min"] = self._running_min[name]
+            out[f"running.{name}.max"] = self._running_max[name]
+        out["clip"] = torch.tensor(self.clip)
+        return out
+
+    def load_state_dict(self, sd: Dict[str, Tensor]) -> None:
+        self.clip = bool(sd.get("clip", torch.tensor(True)).item())
+        self.fixed_bounds = {}
+        self._running_min = {}
+        self._running_max = {}
+        self._initialized = {}
+
+        for key in sd:
+            if key.startswith("fixed.") and key.endswith(".lo"):
+                name = key[len("fixed."):-len(".lo")]
+                self.fixed_bounds[name] = (
+                    float(sd[f"fixed.{name}.lo"]),
+                    float(sd[f"fixed.{name}.hi"])
+                )
+            elif key.startswith("running.") and key.endswith(".min"):
+                name = key[len("running."):-len(".min")]
+                self._running_min[name] = sd[f"running.{name}.min"]
+                self._running_max[name] = sd[f"running.{name}.max"]
+                self._initialized[name] = True
+
+    def save(self, path: str) -> None:
+        torch.save(self.state_dict(), path)
+
+    def load(self, path: str) -> None:
+        state_dict = torch.load(path, map_location='cpu')
+        self.load_state_dict(state_dict)
+
+    def to(self, device):
+        for name in self._running_min:
+            self._running_min[name] = self._running_min[name].to(device)
+            self._running_max[name] = self._running_max[name].to(device)
+        return self
+
+    @classmethod
+    def from_file(cls, path: str, device='cpu') -> 'HardNormalizer':
+        state_dict = torch.load(path, map_location=device)
+        normalizer = cls()
+        normalizer.load_state_dict(state_dict)
+        normalizer.to(device)
+        return normalizer

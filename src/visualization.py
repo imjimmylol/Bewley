@@ -1833,7 +1833,20 @@ def plot_A1_1_MPS_hetero(
 # =============================================================================
 
 def _get_normalizer_stats(normalizer, key):
-    """Extract mean and std from normalizer for denormalization."""
+    """Extract mean and std from normalizer for denormalization.
+    Returns (mean, std) for Welford, or (lo, hi-lo) for HardNormalizer."""
+    if not hasattr(normalizer, '_stats'):
+        # HardNormalizer: return (offset, scale) so denorm = normalized * scale + offset
+        from src.normalizer import HardNormalizer
+        if isinstance(normalizer, HardNormalizer):
+            if key in normalizer.fixed_bounds:
+                lo, hi = normalizer.fixed_bounds[key]
+                return lo, hi - lo  # mean=lo, std=range (denorm: x*range + lo)
+            elif key in normalizer._running_min:
+                lo = float(normalizer._running_min[key].item())
+                hi = float(normalizer._running_max[key].item())
+                return lo, max(hi - lo, 1e-8)
+        return 0.0, 1.0
     if key not in normalizer._stats:
         return 0.0, 1.0
     stats = normalizer._stats[key]

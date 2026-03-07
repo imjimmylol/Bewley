@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from src.env_state import MainState
 from src.environment import EconomyEnv
-from src.normalizer import RunningPerAgentWelford
+from src.normalizer import RunningPerAgentWelford, HardNormalizer
 from src.models.model import FiLMResNet2In
 from src.calloss import LossCalculator
 from src.monitoring import TrainingMonitor
@@ -165,12 +165,19 @@ def train(config, run):
     else torch.device("cpu")
     )
     print(f"Using device: {device}")
-    # Per-agent mode: each agent has its own normalization statistics
-    # normalizer = RunningPerAgentWelford(batch_dim=0, agent_dim=1)
-
-    # Global mode: all agents share the same mean/std statistics
-    # This ensures decision rule evaluation works correctly for any (m_t, v_t) combination
-    normalizer = RunningPerAgentWelford(batch_dim=0, agent_dim=None)
+    # --- Normalizer selection (controlled by config.training.normalizer) ---
+    norm_type = getattr(config.training, 'normalizer', 'welford')
+    if norm_type == 'hard':
+        # Hard normalization: fixed bounds → [0, 1]
+        # ability uses config bounds; money_disposable tracks running max
+        v_min = getattr(config.initial_state, 'v_min', 0)
+        v_max = getattr(config.initial_state, 'v_max', 100)
+        normalizer = HardNormalizer(fixed_bounds={"ability": (v_min, v_max)})
+        print(f"Using HardNormalizer (ability: [{v_min:.4f}, {v_max:.4f}], moneydisposable: running)")
+    else:
+        # Welford (running mean/std, maps to ~N(0,1))
+        normalizer = RunningPerAgentWelford(batch_dim=0, agent_dim=None)
+        print(f"Using Welford normalizer (global mode)")
     env = EconomyEnv(config, normalizer, device=device)
     policy_net = FiLMResNet2In(
         state_dim=2*config.training.agents+2,

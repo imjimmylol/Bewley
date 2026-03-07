@@ -1052,29 +1052,35 @@ class PolicyEvaluator:
             print(f"  - moneydisposable_norm[0,0] = {moneydisposable_normalized[0, 0].item():.4f}")
             print(f"  - ability_norm[0,0] = {ability_normalized[0, 0].item():.4f}")
 
-            # Print normalizer statistics
-            if "ability" in self.normalizer._stats:
-                stats = self.normalizer._stats["ability"]
-                print(f"DEBUG [{debug_label}]: Ability normalizer stats:")
-                print(f"  - global_mode = {self.normalizer.global_mode}")
-                if self.normalizer.global_mode:
-                    print(f"  - mean = {stats.mean.item():.4f}")
-                    var = stats.M2 / torch.clamp(stats.count - 1.0, min=1.0)
-                    std = torch.sqrt(torch.clamp(var, min=0.0) + self.normalizer.eps)
-                    print(f"  - std = {std.item():.4f}")
-                else:
-                    print(f"  - mean[0] = {stats.mean[0].item():.4f}")
+            # Print normalizer statistics (Welford-specific)
+            if hasattr(self.normalizer, '_stats'):
+                if "ability" in self.normalizer._stats:
+                    stats = self.normalizer._stats["ability"]
+                    print(f"DEBUG [{debug_label}]: Ability normalizer stats:")
+                    print(f"  - global_mode = {self.normalizer.global_mode}")
+                    if self.normalizer.global_mode:
+                        print(f"  - mean = {stats.mean.item():.4f}")
+                        var = stats.M2 / torch.clamp(stats.count - 1.0, min=1.0)
+                        std = torch.sqrt(torch.clamp(var, min=0.0) + self.normalizer.eps)
+                        print(f"  - std = {std.item():.4f}")
+                    else:
+                        print(f"  - mean[0] = {stats.mean[0].item():.4f}")
 
-            if "moneydisposalbe" in self.normalizer._stats:
-                stats = self.normalizer._stats["moneydisposalbe"]
-                print(f"DEBUG [{debug_label}]: Moneydisposable normalizer stats:")
-                if self.normalizer.global_mode:
-                    print(f"  - mean = {stats.mean.item():.4f}")
-                    var = stats.M2 / torch.clamp(stats.count - 1.0, min=1.0)
-                    std = torch.sqrt(torch.clamp(var, min=0.0) + self.normalizer.eps)
-                    print(f"  - std = {std.item():.4f}")
-                else:
-                    print(f"  - mean[0] = {stats.mean[0].item():.4f}")
+                if "moneydisposalbe" in self.normalizer._stats:
+                    stats = self.normalizer._stats["moneydisposalbe"]
+                    print(f"DEBUG [{debug_label}]: Moneydisposable normalizer stats:")
+                    if self.normalizer.global_mode:
+                        print(f"  - mean = {stats.mean.item():.4f}")
+                        var = stats.M2 / torch.clamp(stats.count - 1.0, min=1.0)
+                        std = torch.sqrt(torch.clamp(var, min=0.0) + self.normalizer.eps)
+                        print(f"  - std = {std.item():.4f}")
+                    else:
+                        print(f"  - mean[0] = {stats.mean[0].item():.4f}")
+            elif hasattr(self.normalizer, 'fixed_bounds'):
+                print(f"DEBUG [{debug_label}]: HardNormalizer bounds:")
+                print(f"  - fixed: {self.normalizer.fixed_bounds}")
+                for name in self.normalizer._running_min:
+                    print(f"  - {name}: [{self.normalizer._running_min[name].item():.4f}, {self.normalizer._running_max[name].item():.4f}]")
 
         # Build model inputs using the SAME function as training
         features, condi = build_inputs(
