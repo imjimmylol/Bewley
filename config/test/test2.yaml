@@ -3,7 +3,7 @@
 # This prevents ability explosion and model collapse
 
 # Experiment name
-exp_name: "test"
+exp_name: "test2"
 
 training:
   agents: 100
@@ -12,13 +12,13 @@ training:
   batch_size: 32
   display_step: 5
   train_step_interval: 4
-  save_interval: 10
+  save_interval: 20
   normalizer: "hard"  # Options: "welford" (running mean/std → ~N(0,1)), "hard" (fixed bounds → [0,1])
 
 bewley_model:
   theta: 1.0         # CRRA
   beta: 0.96         # Discount factor
-  A: 1.0             # Technology parameter
+  A: 2.0             # Technology parameter
   alpha: 0.33        # Capital share of income
   gamma: 2.0         # Inverse Frisch elasticity
   r: 0.04            # Interest rate (return to savings)

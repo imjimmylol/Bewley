@@ -252,3 +252,56 @@ The decision rule plots help you understand:
 - **Precautionary savings**: How agents save for future uncertainty
 - **Policy heterogeneity**: Whether different agents have learned different strategies
 
+## Comparing Runs
+
+After training multiple configs, use `compare_runs.py` to overlay or grid decision rules and input-output plots from different runs side by side. Numerical plot data (`.npz`) is saved automatically during training under `checkpoints/{run_name}/plot_data/`.
+
+### Basic Usage
+
+```bash
+# Compare two runs (overlay mode, median quantile line)
+python compare_runs.py checkpoints/Bewley_Hetero_ability_low_uncer checkpoints/Bewley_Hetero_ability_high_uncer
+
+# Specify a training step and which plots to compare
+python compare_runs.py checkpoints/RunA checkpoints/RunB --step 20000 --plots A1 B1 H1
+
+# Show all quantile lines instead of just the median
+python compare_runs.py checkpoints/RunA checkpoints/RunB --color-level all
+
+# Use grid layout (one subplot per run) instead of overlay
+python compare_runs.py checkpoints/RunA checkpoints/RunB --layout grid
+
+# Compare input-output plots
+python compare_runs.py checkpoints/RunA checkpoints/RunB --type input_output
+
+# Clip x-axis to the intersection of runs' ranges
+python compare_runs.py checkpoints/RunA checkpoints/RunB --shared-xrange
+
+# Custom output directory
+python compare_runs.py checkpoints/RunA checkpoints/RunB --output-dir my_comparison/
+```
+
+### Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `run_dirs` | (required) | Two or more checkpoint directories to compare |
+| `--step` | latest common | Training step to compare |
+| `--plots` | all common | Plot IDs to generate (e.g., `A1 B1 A1-1 H1`) |
+| `--type` | `grid` | Data type: `grid` (decision rules) or `input_output` |
+| `--layout` | auto | `overlay` (<=3 runs) or `grid` (4+ runs) |
+| `--color-level` | `q50` | Quantile level: `q5`/`q25`/`q50`/`q75`/`q95`/`all` |
+| `--shared-xrange` | off | Clip x-axis to intersection of all runs' ranges |
+| `--output-dir` | `comparison_plots` | Where to save output PDFs |
+
+### Output
+
+Comparison plots are saved as PDFs in the output directory:
+```
+comparison_plots/
+  compare_A1_step_20000.pdf
+  compare_B1_step_20000.pdf
+  compare_H1_step_20000.pdf
+  ...
+```
+

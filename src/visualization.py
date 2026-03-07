@@ -799,7 +799,7 @@ def plot_decision_rule(
             "step": step
         })
 
-    return fig
+    return fig, results
 
 
 def plot_A1_resources_to_assets(
@@ -838,7 +838,7 @@ def plot_A1_resources_to_assets(
     """
     if not show_losses:
         # Original behavior: single plot
-        fig = plot_decision_rule(
+        fig, results = plot_decision_rule(
             evaluator=evaluator,
             x_var="m_t",
             y_var="a_tp1",
@@ -854,10 +854,10 @@ def plot_A1_resources_to_assets(
             ylim=ylim,
             n_points=n_points
         )
-        return fig
+        return fig, results
 
     # With losses: create figure with 4 subplots sharing x-axis
-    fig = plot_decision_rule_with_losses(
+    fig, results = plot_decision_rule_with_losses(
         evaluator=evaluator,
         x_var="m_t",
         y_var="a_tp1",
@@ -873,7 +873,7 @@ def plot_A1_resources_to_assets(
         n_points=n_points,
         foc_threshold=foc_threshold
     )
-    return fig
+    return fig, results
 
 
 def plot_decision_rule_with_losses(
@@ -1099,7 +1099,7 @@ def plot_decision_rule_with_losses(
             "step": step
         })
 
-    return fig
+    return fig, results
 
 
 def plot_H1_resources_to_labor(
@@ -1121,7 +1121,7 @@ def plot_H1_resources_to_labor(
     Shows how agents choose labor supply across different ability levels.
     """
     if not show_losses:
-        fig = plot_decision_rule(
+        fig, results = plot_decision_rule(
             evaluator=evaluator,
             x_var="m_t",
             y_var="l_t",
@@ -1137,9 +1137,9 @@ def plot_H1_resources_to_labor(
             ylim=ylim,
             n_points=n_points
         )
-        return fig
+        return fig, results
 
-    fig = plot_decision_rule_with_losses(
+    fig, results = plot_decision_rule_with_losses(
         evaluator=evaluator,
         x_var="m_t",
         y_var="l_t",
@@ -1155,7 +1155,7 @@ def plot_H1_resources_to_labor(
         n_points=n_points,
         foc_threshold=foc_threshold
     )
-    return fig
+    return fig, results
 
 
 def plot_H1_labor_hetero(
@@ -1315,7 +1315,7 @@ def plot_H1_labor_hetero(
             "step": step
         })
 
-    return fig
+    return fig, results
 
 
 def plot_A1_1_MPS(
@@ -1515,7 +1515,7 @@ def plot_A1_1_MPS(
             "step": step
         })
 
-    return fig
+    return fig, results
 
 
 def plot_B1_assets_to_assets(
@@ -1555,7 +1555,7 @@ def plot_B1_assets_to_assets(
     """
     if not show_losses:
         # Original behavior: single plot
-        fig = plot_decision_rule(
+        fig, results = plot_decision_rule(
             evaluator=evaluator,
             x_var="a_t",
             y_var="a_tp1",
@@ -1571,10 +1571,10 @@ def plot_B1_assets_to_assets(
             ylim=ylim,
             n_points=n_points
         )
-        return fig
+        return fig, results
 
     # With losses: create figure with 4 subplots sharing x-axis
-    fig = plot_decision_rule_with_losses(
+    fig, results = plot_decision_rule_with_losses(
         evaluator=evaluator,
         x_var="a_t",
         y_var="a_tp1",
@@ -1590,7 +1590,7 @@ def plot_B1_assets_to_assets(
         n_points=n_points,
         foc_threshold=foc_threshold
     )
-    return fig
+    return fig, results
 
 
 def compute_vbar_bin_means(
@@ -1825,7 +1825,7 @@ def plot_A1_1_MPS_hetero(
             "step": step
         })
 
-    return fig
+    return fig, results
 
 
 # =============================================================================
@@ -2114,7 +2114,9 @@ def plot_all_decision_rules(
     show_losses: bool = True,
     n_points: int = 100,
     foc_threshold: float = 0.1,
-    v_bar: Optional[np.ndarray] = None
+    v_bar: Optional[np.ndarray] = None,
+    data_save_dir: Optional[str] = None,
+    exp_name: Optional[str] = None
 ) -> Dict[str, plt.Figure]:
     """
     Generate all (or selected) decision rule plots.
@@ -2129,12 +2131,17 @@ def plot_all_decision_rules(
         n_points: Number of grid points for evaluation
         foc_threshold: Threshold for Labor FOC loss to mark FOC-optimal regions (default: 0.1)
         v_bar: Flattened v_bar array for hetero agent plots (required for "A1-1h")
+        data_save_dir: If set, save numerical grid data as .npz for cross-run comparison
+        exp_name: Experiment name for metadata in saved .npz files
 
     Returns:
         Dict mapping plot ID to Figure
     """
     import os
     os.makedirs(save_dir, exist_ok=True)
+
+    if data_save_dir:
+        from src.plot_data_io import save_grid_data
 
     if plots is None:
         plots = ["A1", "A1-1", "B1", "A1-1h", "H1", "H1-h"]
@@ -2163,7 +2170,7 @@ def plot_all_decision_rules(
                 continue
             suffix = "_with_losses" if show_losses else ""
             save_path = os.path.join(save_dir, f"fig_{plot_id}{suffix}_step_{step}.png") if step else os.path.join(save_dir, f"fig_{plot_id}{suffix}.png")
-            fig = hetero_plot_funcs[plot_id](
+            fig, grid_results = hetero_plot_funcs[plot_id](
                 evaluator=evaluator,
                 v_bar=v_bar,
                 save_path=save_path,
@@ -2174,11 +2181,13 @@ def plot_all_decision_rules(
                 foc_threshold=foc_threshold
             )
             figures[plot_id] = fig
+            if data_save_dir and grid_results is not None:
+                save_grid_data(grid_results, plot_id, step, exp_name or "", data_save_dir)
             plt.close(fig)
         elif plot_id in plot_funcs:
             suffix = "_with_losses" if show_losses else ""
             save_path = os.path.join(save_dir, f"fig_{plot_id}{suffix}_step_{step}.png") if step else os.path.join(save_dir, f"fig_{plot_id}{suffix}.png")
-            fig = plot_funcs[plot_id](
+            fig, grid_results = plot_funcs[plot_id](
                 evaluator=evaluator,
                 save_path=save_path,
                 log_to_wandb=log_to_wandb,
@@ -2188,6 +2197,8 @@ def plot_all_decision_rules(
                 foc_threshold=foc_threshold
             )
             figures[plot_id] = fig
+            if data_save_dir and grid_results is not None:
+                save_grid_data(grid_results, plot_id, step, exp_name or "", data_save_dir)
             plt.close(fig)
 
     return figures

@@ -25,6 +25,7 @@ from src.policy_evaluation import (
     PolicyEvaluator,
     collect_ranges_from_step
 )
+from src.plot_data_io import save_input_output_data, save_run_meta
 import numpy as np
 
 def initialize_env_state(config, device="cpu"):
@@ -151,9 +152,16 @@ def train(config, run):
     states_dir = os.path.join(base_checkpoint_dir, "states")
     normalizer_dir = os.path.join(base_checkpoint_dir, "normalizer")
 
+    plot_data_grid_dir = os.path.join(base_checkpoint_dir, "plot_data", "grid")
+    plot_data_io_dir = os.path.join(base_checkpoint_dir, "plot_data", "input_output")
+
     os.makedirs(weights_dir, exist_ok=True)
     os.makedirs(states_dir, exist_ok=True)
     os.makedirs(normalizer_dir, exist_ok=True)
+    os.makedirs(plot_data_grid_dir, exist_ok=True)
+    os.makedirs(plot_data_io_dir, exist_ok=True)
+
+    save_run_meta(config, os.path.join(base_checkpoint_dir, "plot_data"))
 
     print(f"Checkpoints will be saved in: {base_checkpoint_dir}")
 
@@ -374,7 +382,9 @@ def train(config, run):
                     log_to_wandb=True,
                     step=step,
                     plots=["A1", "A1-1", "B1", "A1-1h", "H1", "H1-h"],  # Specify which plots to generate
-                    v_bar=main_state.v_bar.detach().cpu().numpy().flatten()
+                    v_bar=main_state.v_bar.detach().cpu().numpy().flatten(),
+                    data_save_dir=plot_data_grid_dir,
+                    exp_name=run_name
                 )
 
             # ==== Direct Input-Output Visualization ====
@@ -418,6 +428,18 @@ def train(config, run):
                 features_snap, zeta_snap, mu_snap, labor_snap,
                 save_path=os.path.join(base_checkpoint_dir, f"input_output_pca_step_{step}.png"),
                 log_to_wandb=True, step=step
+            )
+
+            # Save numerical input-output data for cross-run comparison
+            save_input_output_data(
+                own_money=features_snap[..., -2].detach().cpu().numpy().flatten(),
+                own_ability=features_snap[..., -1].detach().cpu().numpy().flatten(),
+                zeta=zeta_snap.detach().cpu().numpy().flatten(),
+                mu=mu_snap.detach().cpu().numpy().flatten(),
+                labor=labor_snap.detach().cpu().numpy().flatten(),
+                per_agent_losses=per_agent_losses,
+                normalizer_stats={},
+                step=step, exp_name=run_name, save_dir=plot_data_io_dir
             )
 
         # CRITICAL: Clear temporary variables to prevent memory leaks
