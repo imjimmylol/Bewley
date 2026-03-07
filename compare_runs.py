@@ -279,6 +279,9 @@ def plot_io_comparison(
                 edges = np.percentile(other_data, [0, 20, 40, 60, 80, 100])
                 bins = np.digitize(other_data, edges[1:-1])
 
+                # First run more opaque, subsequent runs more transparent
+                alpha = 0.15 if i == 0 else 0.06
+
                 for qi in range(5):
                     mask = bins == qi
                     if mask.sum() == 0:
@@ -290,7 +293,7 @@ def plot_io_comparison(
                     ax.scatter(
                         x[mask], y[mask],
                         c=Q_COLORS[qi], marker=marker,
-                        alpha=0.08, s=2, rasterized=True,
+                        alpha=alpha, s=2, rasterized=True,
                         label=label,
                     )
 
