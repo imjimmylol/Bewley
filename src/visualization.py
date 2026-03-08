@@ -1866,6 +1866,7 @@ def plot_input_output_pairwise(
     labor: torch.Tensor,
     normalizer,
     per_agent_losses: Optional[Dict[str, np.ndarray]] = None,
+    utility: Optional[np.ndarray] = None,
     save_path: Optional[str] = None,
     log_to_wandb: bool = False,
     step: Optional[int] = None,
@@ -1912,11 +1913,18 @@ def plot_input_output_pairwise(
     ]
 
     has_losses = per_agent_losses is not None and len(per_agent_losses) > 0
-    n_rows = 3 if has_losses else 2
+    has_utility = utility is not None
+    n_rows = 2 + (1 if has_utility else 0) + (1 if has_losses else 0)
+
+    height_ratios = [3, 3]
+    if has_utility:
+        height_ratios.append(3)
+    if has_losses:
+        height_ratios.append(2)
 
     fig, axes = plt.subplots(
         n_rows, 3, figsize=(16, 5 * n_rows),
-        gridspec_kw={'height_ratios': [3, 3, 2] if has_losses else [1, 1]}
+        gridspec_kw={'height_ratios': height_ratios}
     )
 
     q_colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd"]
@@ -1963,12 +1971,46 @@ def plot_input_output_pairwise(
 
         axes[row, 0].legend(fontsize=7, markerscale=3, loc='best')
 
-    # ---- Row 3: Mean losses per quintile bin ----
+    # ---- Utility row: own_money vs utility, own_ability vs utility ----
+    if has_utility:
+        utility_row = 2
+        utility_inputs = [
+            ("Own Money (normalized)", own_money, mean_m, std_m, ability_bins, "ability"),
+            ("Own Ability (normalized)", own_ability, mean_v, std_v, money_bins, "money"),
+        ]
+        for col, (x_label, x_data, mean, std, bin_indices, other_label) in enumerate(utility_inputs):
+            ax = axes[utility_row, col]
+            for qi in range(5):
+                mask = bin_indices == qi
+                if mask.sum() == 0:
+                    continue
+                ax.scatter(
+                    x_data[mask], utility[mask],
+                    c=q_colors[qi], alpha=0.15, s=3, rasterized=True,
+                    label=f"{other_label} {q_labels[qi]}" if col == 0 else None
+                )
+            ax.set_xlabel(x_label, fontsize=9)
+            ax.set_ylabel(r"$u(c,l)$ (flow utility)", fontsize=9)
+            ax.grid(True, alpha=0.3)
+
+            ax2 = ax.secondary_xaxis('top', functions=(
+                lambda x, m=mean, s=std: x * s + m,
+                lambda x, m=mean, s=std: (x - m) / s
+            ))
+            ax2.set_xlabel("original scale", fontsize=7, color='gray')
+            ax2.tick_params(labelsize=7, colors='gray')
+
+        axes[utility_row, 0].legend(fontsize=7, markerscale=3, loc='best')
+        # Hide 3rd column in utility row
+        axes[utility_row, 2].set_visible(False)
+
+    # ---- Loss row: Mean losses per quintile bin ----
+    loss_row = 2 + (1 if has_utility else 0)
     if has_losses:
         loss_names = list(per_agent_losses.keys())
         # Group by ability quintile (agent "type")
         for col, loss_name in enumerate(loss_names[:3]):
-            ax = axes[2, col]
+            ax = axes[loss_row, col]
             loss_vals = per_agent_losses[loss_name]
 
             means_per_q = []
@@ -1993,7 +2035,7 @@ def plot_input_output_pairwise(
 
         # If fewer than 3 loss types, hide extra axes
         for col in range(len(loss_names), 3):
-            axes[2, col].set_visible(False)
+            axes[loss_row, col].set_visible(False)
 
     title = "Direct Input-Output: Own Features vs Decisions"
     if step is not None:

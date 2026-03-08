@@ -26,6 +26,7 @@ from src.policy_evaluation import (
     collect_ranges_from_step
 )
 from src.plot_data_io import save_input_output_data, save_run_meta
+from src.utils.economics import flow_utility
 import numpy as np
 
 def initialize_env_state(config, device="cpu"):
@@ -418,9 +419,15 @@ def train(config, run):
                 "Labor FOC": labor_foc_per_agent.cpu().numpy().flatten(),
             }
 
+            utility = flow_utility(
+                consumption_t, labor_t,
+                theta=loss_calculator.theta, gamma=loss_calculator.gamma,
+            ).detach().cpu().numpy().flatten()
+
             plot_input_output_pairwise(
                 features_snap, zeta_snap, mu_snap, labor_snap, normalizer,
                 per_agent_losses=per_agent_losses,
+                utility=utility,
                 save_path=os.path.join(base_checkpoint_dir, f"input_output_pairwise_step_{step}.png"),
                 log_to_wandb=True, step=step
             )
@@ -439,7 +446,8 @@ def train(config, run):
                 labor=labor_snap.detach().cpu().numpy().flatten(),
                 per_agent_losses=per_agent_losses,
                 normalizer_stats={},
-                step=step, exp_name=run_name, save_dir=plot_data_io_dir
+                step=step, exp_name=run_name, save_dir=plot_data_io_dir,
+                utility=utility
             )
 
         # CRITICAL: Clear temporary variables to prevent memory leaks

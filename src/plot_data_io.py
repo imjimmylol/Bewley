@@ -136,7 +136,8 @@ def save_input_output_data(
     normalizer_stats: Dict[str, float],
     step: int,
     exp_name: str,
-    save_dir: str
+    save_dir: str,
+    utility: Optional[np.ndarray] = None,
 ) -> str:
     """
     Save input-output pairwise data as .npz file.
@@ -173,6 +174,10 @@ def save_input_output_data(
     for k, v in normalizer_stats.items():
         save_dict[f"norm_{k}"] = np.array(v, dtype="f8")
 
+    # Per-agent utility
+    if utility is not None:
+        save_dict["utility"] = utility
+
     # Per-agent losses
     if per_agent_losses:
         for loss_name, arr in per_agent_losses.items():
@@ -196,6 +201,12 @@ def load_input_output_data(npz_path: str) -> Dict[str, Any]:
         "exp_name": str(data["exp_name"]),
         "step": int(data["step"]),
     }
+
+    # Per-agent utility
+    if "utility" in data.files:
+        result["utility"] = data["utility"]
+    else:
+        result["utility"] = None
 
     # Normalizer stats
     norm_stats = {}

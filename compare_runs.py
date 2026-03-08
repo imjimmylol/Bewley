@@ -252,6 +252,7 @@ def plot_io_comparison(
     Compare input-output pairwise data across runs.
     Overlay runs on the same subplots with quintile coloring by agent type.
     Grid: rows = (money, ability) × columns = (zeta, mu, labor).
+    Optional utility row and loss row below.
     Each run uses a different marker shape; colors indicate quintile of the OTHER input.
     """
     inputs = ["own_money", "own_ability"]
@@ -259,7 +260,19 @@ def plot_io_comparison(
     outputs = ["zeta", "mu", "labor"]
     output_labels = [r"$\zeta_t$ (savings ratio)", r"$\mu_t$ (multiplier)", r"$l_t$ (labor)"]
 
-    fig, axes = plt.subplots(2, 3, figsize=(16, 10), squeeze=False)
+    has_utility = any(d.get("utility") is not None for d in datasets)
+    has_losses = any(d.get("per_agent_losses") for d in datasets)
+    n_rows = 2 + (1 if has_utility else 0) + (1 if has_losses else 0)
+
+    height_ratios = [3, 3]
+    if has_utility:
+        height_ratios.append(3)
+    if has_losses:
+        height_ratios.append(2)
+
+    fig, axes = plt.subplots(n_rows, 3, figsize=(16, 5 * n_rows),
+                             squeeze=False,
+                             gridspec_kw={"height_ratios": height_ratios})
 
     for row, (inp, inp_label) in enumerate(zip(inputs, input_labels)):
         # Color by the OTHER input's quintile (same as original plot)
@@ -302,6 +315,91 @@ def plot_io_comparison(
             ax.grid(True, alpha=0.3)
 
     axes[0, 0].legend(fontsize=6, markerscale=5, loc="best", ncol=len(datasets))
+
+    # ---- Utility row: own_money vs utility, own_ability vs utility ----
+    if has_utility:
+        utility_row = 2
+        utility_inputs = [
+            ("own_money", "Own Money (normalized)", "own_ability", "ability"),
+            ("own_ability", "Own Ability (normalized)", "own_money", "money"),
+        ]
+        for col, (inp_key, inp_label, other_key, other_label) in enumerate(utility_inputs):
+            ax = axes[utility_row, col]
+            for i, data in enumerate(datasets):
+                if data.get("utility") is None:
+                    continue
+                x = data[inp_key]
+                y = data["utility"]
+                marker = RUN_MARKERS[i % len(RUN_MARKERS)]
+                other_data = data[other_key]
+                edges = np.percentile(other_data, [0, 20, 40, 60, 80, 100])
+                bins = np.digitize(other_data, edges[1:-1])
+                alpha = 0.8 if i == 0 else 0.2
+
+                for qi in range(5):
+                    mask = bins == qi
+                    if mask.sum() == 0:
+                        continue
+                    label = None
+                    if col == 0:
+                        label = f"{data['exp_name']} {other_label} {Q_LABELS[qi]}"
+                    ax.scatter(
+                        x[mask], y[mask],
+                        c=Q_COLORS[qi], marker=marker,
+                        alpha=alpha, s=2, rasterized=True,
+                        label=label,
+                    )
+            ax.set_xlabel(inp_label, fontsize=9)
+            ax.set_ylabel(r"$u(c,l)$ (flow utility)", fontsize=9)
+            ax.grid(True, alpha=0.3)
+
+        axes[utility_row, 0].legend(fontsize=6, markerscale=5, loc="best", ncol=len(datasets))
+        axes[utility_row, 2].set_visible(False)
+
+    # ---- Loss row: Mean losses per ability quintile ----
+    if has_losses:
+        loss_row = 2 + (1 if has_utility else 0)
+        # Collect common loss names across datasets
+        all_loss_names = set()
+        for data in datasets:
+            if data.get("per_agent_losses"):
+                all_loss_names.update(data["per_agent_losses"].keys())
+        loss_names = sorted(all_loss_names)[:3]
+
+        bar_width = 0.8 / max(len(datasets), 1)
+        for col, loss_name in enumerate(loss_names):
+            ax = axes[loss_row, col]
+            for i, data in enumerate(datasets):
+                losses = data.get("per_agent_losses", {})
+                loss_vals = losses.get(loss_name)
+                if loss_vals is None:
+                    continue
+                ability_data = data["own_ability"]
+                edges = np.percentile(ability_data, [0, 20, 40, 60, 80, 100])
+                bins = np.digitize(ability_data, edges[1:-1])
+
+                means_per_q = []
+                for qi in range(5):
+                    mask = bins == qi
+                    if mask.sum() > 0:
+                        means_per_q.append(np.mean(np.abs(loss_vals[mask])))
+                    else:
+                        means_per_q.append(0.0)
+
+                x_pos = np.arange(5) + i * bar_width
+                ax.bar(x_pos, means_per_q, width=bar_width, alpha=0.7,
+                       label=data["exp_name"], color=RUN_COLORS[i % len(RUN_COLORS)])
+
+            ax.set_xticks(np.arange(5) + bar_width * (len(datasets) - 1) / 2)
+            ax.set_xticklabels(Q_LABELS)
+            ax.set_ylabel(f"Mean |{loss_name}|", fontsize=9)
+            ax.set_xlabel("Ability quintile", fontsize=9)
+            ax.set_title(f"{loss_name} by agent type", fontsize=10)
+            ax.grid(True, alpha=0.3, axis="y")
+            ax.legend(fontsize=7)
+
+        for col in range(len(loss_names), 3):
+            axes[loss_row, col].set_visible(False)
 
     fig.suptitle("Input-Output Comparison (overlaid)", fontsize=14, fontweight="bold")
     plt.tight_layout()
