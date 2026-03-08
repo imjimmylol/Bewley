@@ -419,8 +419,12 @@ def train(config, run):
                 "Labor FOC": labor_foc_per_agent.cpu().numpy().flatten(),
             }
 
+            # Compute utility from snapshot (consistent with plotted zeta/labor)
+            # Denormalize money from snapshot features, then c = m * (1 - zeta)
+            money_snap = normalizer.denormalize("moneydisposalbe", features_snap[..., -2])  # (B, A)
+            consumption_snap = money_snap * (1.0 - zeta_snap)
             utility = flow_utility(
-                consumption_t, labor_t,
+                consumption_snap, labor_snap,
                 theta=loss_calculator.theta, gamma=loss_calculator.gamma,
             ).detach().cpu().numpy().flatten()
 

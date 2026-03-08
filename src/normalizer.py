@@ -102,6 +102,35 @@ class RunningPerAgentWelford:
 
         return y
 
+    def denormalize(self, name: str, y: Tensor) -> Tensor:
+        """
+        Inverse of transform: convert normalized tensor back to original scale.
+
+        Args:
+            name: Variable name (must match the name used in transform)
+            y: Normalized tensor (same shape as transform output)
+
+        Returns:
+            Denormalized tensor in original scale
+        """
+        if name not in self._stats:
+            return y
+        stats = self._stats[name]
+        mean, var = self._current_mean_var(stats)
+        std = torch.sqrt(torch.clamp(var, min=0.0) + self.eps)
+        std = torch.clamp(std, min=self.min_std)
+
+        if self.global_mode:
+            mean_b = mean.unsqueeze(0).unsqueeze(0)
+            std_b = std.unsqueeze(0).unsqueeze(0)
+            return y * std_b + mean_b
+        else:
+            y_ba = self._move_to_ba(y)
+            mean_b = mean.unsqueeze(0)
+            std_b = std.unsqueeze(0)
+            x_ba = y_ba * std_b + mean_b
+            return self._move_from_ba(x_ba, y)
+
     def state_dict(self) -> Dict[str, Tensor]:
         out: Dict[str, Tensor] = {
             "batch_dim": torch.tensor(self.batch_dim),
@@ -415,6 +444,30 @@ class HardNormalizer:
             y = torch.clamp(y, 0.0, 1.0)
 
         return y
+
+    def denormalize(self, name: str, y: Tensor) -> Tensor:
+        """
+        Inverse of transform: convert normalized [0,1] tensor back to original scale.
+
+        Args:
+            name: Variable name (must match the name used in transform)
+            y: Normalized tensor in [0, 1]
+
+        Returns:
+            Denormalized tensor in original scale
+        """
+        if name in self.fixed_bounds:
+            lo, hi = self.fixed_bounds[name]
+            lo_t = torch.tensor(lo, device=y.device, dtype=y.dtype)
+            hi_t = torch.tensor(hi, device=y.device, dtype=y.dtype)
+        elif name in self._initialized and self._initialized[name]:
+            lo_t = self._running_min[name].to(device=y.device, dtype=y.dtype)
+            hi_t = self._running_max[name].to(device=y.device, dtype=y.dtype)
+        else:
+            return y
+        denom = hi_t - lo_t
+        denom = torch.clamp(denom, min=1e-8)
+        return y * denom + lo_t
 
     def _update_running(self, name: str, x: Tensor) -> None:
         x_det = x.detach()
