@@ -25,8 +25,9 @@ from src.policy_evaluation import (
     PolicyEvaluator,
     collect_ranges_from_step
 )
-from src.plot_data_io import save_input_output_data, save_run_meta
+from src.plot_data_io import save_input_output_data, save_run_meta, save_panel_data
 from src.utils.economics import flow_utility
+from src.cluster_analysis import PanelBuffer, lightweight_cluster_snapshot
 import numpy as np
 
 def initialize_env_state(config, device="cpu"):
@@ -212,6 +213,16 @@ def train(config, run):
     # Initialize historical ranges for synthetic grid evaluation
     # Enable per-agent tracking so we can use agent-specific x-axis ranges
     historical_ranges = HistoricalRanges(track_per_agent=True)
+
+    # Initialize panel buffer for regime tracking (tracks batch 0 across time)
+    panel_buffer_size = getattr(config.training, 'panel_buffer_size', 200)
+    cluster_interval = getattr(config.training, 'cluster_interval', 5000)
+    panel_buffer = PanelBuffer(
+        max_steps=panel_buffer_size,
+        n_agents=config.training.agents,
+    )
+    plot_data_panel_dir = os.path.join(base_checkpoint_dir, "plot_data", "panel")
+    os.makedirs(plot_data_panel_dir, exist_ok=True)
     
     # --- 3.5 Plot initial state distributions before training ---
     print("Plotting initial state distributions...")
@@ -460,6 +471,42 @@ def train(config, run):
                 utility=utility
             )
 
+        # ==== PANEL BUFFER: Collect batch-0 data for regime tracking ====
+        # Must happen before the del block below.
+        # Batch 0 agents are persistent across steps (MainState carries forward),
+        # giving a genuine panel: agent_id × time.
+        panel_buffer.append(step, {
+            'ability':           ability_t[0].detach().cpu().numpy(),
+            'saving_ratio':      savings_ratio_t[0].detach().cpu().numpy(),
+            'mu':                mu_t[0].detach().cpu().numpy(),
+            'labor':             labor_t[0].detach().cpu().numpy(),
+            'money_disposable':  money_disposable_t[0].detach().cpu().numpy(),
+            'consumption':       consumption_t[0].detach().cpu().numpy(),
+            'savings':           savings_t[0].detach().cpu().numpy(),
+            'income_before_tax': ibt[0].detach().cpu().numpy(),
+            'wage':              wage_t[0].detach().cpu().numpy(),
+            'ret':               ret_t[0].detach().cpu().numpy(),
+        })
+
+        # ==== LIGHTWEIGHT CLUSTERING: Periodic cross-sectional GMM snapshot ====
+        if step % cluster_interval == 0 and step > 0:
+            try:
+                cluster_result = lightweight_cluster_snapshot(
+                    ability=ability_t.detach().cpu().numpy().flatten(),
+                    saving_ratio=savings_ratio_t.detach().cpu().numpy().flatten(),
+                    mu=mu_t.detach().cpu().numpy().flatten(),
+                    labor=labor_t.detach().cpu().numpy().flatten(),
+                )
+                wandb.log({
+                    'regime/fraction_high':    cluster_result['regime_fraction_high'],
+                    'regime/fraction_low':     cluster_result['regime_fraction_low'],
+                    'regime/separation_score': cluster_result['separation_score'],
+                    'regime/bic_k2':           cluster_result['bic'],
+                    'regime/aic_k2':           cluster_result['aic'],
+                }, step=step)
+            except Exception as e:
+                print(f"[regime tracking] Lightweight clustering failed at step {step}: {e}")
+
         # CRITICAL: Clear temporary variables to prevent memory leaks
         # Delete tensors that have computational graphs attached
         del temp_state, parallel_A, parallel_B, outcomes_A, outcomes_B
@@ -475,6 +522,7 @@ def train(config, run):
             torch.save(policy_net.state_dict(), os.path.join(weights_dir, f"model_step_{step}.pt"))
             torch.save(main_state, os.path.join(states_dir, f"state_step_{step}.pt"))
             normalizer.save(os.path.join(normalizer_dir, f"norm_step_{step}.pt"))
+            save_panel_data(panel_buffer, step, run_name, plot_data_panel_dir)
 
     print("\nTraining loop finished.")
     # --- 6. Final save (Example) ---

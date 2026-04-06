@@ -323,6 +323,56 @@ def discover_runs(checkpoints_dir: str) -> List[Dict[str, Any]]:
                     io_steps.add(int(step_str))
         run_info["io_steps"] = sorted(io_steps)
 
+        # Discover panel data (cluster tracking)
+        panel_dir = os.path.join(plot_data_dir, "panel")
+        panel_steps = set()
+        if os.path.isdir(panel_dir):
+            for f in os.listdir(panel_dir):
+                if f.startswith("panel_step_") and f.endswith(".npz"):
+                    step_str = f[len("panel_step_"):-4]
+                    try:
+                        panel_steps.add(int(step_str))
+                    except ValueError:
+                        pass
+        run_info["panel_steps"] = sorted(panel_steps)
+
         runs.append(run_info)
 
     return runs
+
+
+# ---------------------------------------------------------------------------
+# Panel data save / load (for cluster tracking)
+# ---------------------------------------------------------------------------
+
+def save_panel_data(panel_buffer, step: int, exp_name: str, save_dir: str) -> str:
+    """
+    Save a PanelBuffer to a .npz file.
+
+    Args:
+        panel_buffer: PanelBuffer instance.
+        step: Training step.
+        exp_name: Experiment name (stored in metadata).
+        save_dir: Directory for panel .npz files (plot_data/panel/).
+
+    Returns:
+        Path to saved .npz file.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    path = os.path.join(save_dir, f"panel_step_{step}.npz")
+    panel_buffer.to_npz(path)
+    return path
+
+
+def load_panel_data(npz_path: str):
+    """
+    Load a PanelBuffer from a .npz file.
+
+    Args:
+        npz_path: Path to panel .npz file.
+
+    Returns:
+        PanelBuffer instance.
+    """
+    from src.cluster_analysis import PanelBuffer
+    return PanelBuffer.from_npz(npz_path)
