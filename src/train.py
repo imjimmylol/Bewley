@@ -323,8 +323,14 @@ def train(config, run):
             temp_state, main_state, historical_ranges, track_per_agent=True
         )
 
-        # ==== VISUALIZATION: Generate decision rule plots at checkpoint intervals ====
-        if step % config.training.save_interval == 0:
+        # ==== VISUALIZATION: Generate decision rule plots at plot intervals ====
+        # Use frequent interval early, then switch to save_interval after 30k steps
+        plot_interval = getattr(config.training, 'plot_interval', config.training.save_interval)
+        if step >= 15000:
+            current_plot_interval = plot_interval
+        else:
+            current_plot_interval = config.training.save_interval
+        if step % current_plot_interval == 0:
             print(f"\nGenerating decision rule visualizations at step {step}...")
 
             # Prepare data for plotting (converts current step data to plotting format)

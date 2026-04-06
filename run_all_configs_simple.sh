@@ -7,7 +7,7 @@
 #   ./run_all_configs_simple.sh config/1202
 #   ./run_all_configs_simple.sh --project myproj
 #   ./run_all_configs_simple.sh config/1202 --project myproj
-#   ./run_all_configs_simple.sh --project=myproj config/1202
+#   ./run_all_configs_simple.sh --project myproj config/1202
 
 set -u
 
