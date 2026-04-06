@@ -27,8 +27,16 @@ from src.policy_evaluation import (
 )
 from src.plot_data_io import save_input_output_data, save_run_meta, save_panel_data
 from src.utils.economics import flow_utility
-from src.cluster_analysis import PanelBuffer, lightweight_cluster_snapshot
+from src.cluster_analysis import PanelBuffer, RegimeAnalyzer, lightweight_cluster_snapshot
+from src.cluster_visualization import (
+    plot_regime_scatter,
+    plot_regime_paths,
+    plot_transition_matrix,
+    plot_switch_distribution,
+    plot_regime_summary,
+)
 import numpy as np
+import threading
 
 def initialize_env_state(config, device="cpu"):
     """
@@ -130,6 +138,71 @@ def initialize_env_state(config, device="cpu"):
     return state
 
 
+def _run_regime_analysis_background(panel_df, step, output_dir):
+    """Run full RegimeAnalyzer pipeline in a background thread."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    try:
+        analyzer = RegimeAnalyzer(
+            ability_cutoff_quantile=0.5,
+            labor_upper=0.95,
+            n_components=2,
+        )
+        enriched_df = analyzer.fit(panel_df)
+
+        n_regime = enriched_df['regime'].notna().sum()
+        n_total = len(enriched_df)
+        frac_high = (enriched_df['regime'] == 'regime_high').sum() / max(n_total, 1)
+        frac_low = (enriched_df['regime'] == 'regime_low').sum() / max(n_total, 1)
+
+        # Transitions
+        trans_result = analyzer.compute_transitions(enriched_df)
+        enriched_df = trans_result['enriched_df']
+        trans_matrix = trans_result['transition_matrix']
+        trans_labels = trans_result['transition_labels']
+        switch_counts = trans_result['switch_counts']
+
+        # Summary stats (skip robustness check — too slow for training)
+        summary_df = analyzer.compute_summary_stats(enriched_df)
+
+        # Log to wandb
+        wandb.log({
+            'regime_full/fraction_high': frac_high,
+            'regime_full/fraction_low': frac_low,
+            'regime_full/classified': n_regime,
+            'regime_full/total': n_total,
+        }, step=step)
+
+        # Save CSVs
+        step_dir = os.path.join(output_dir, f"step_{step}")
+        os.makedirs(step_dir, exist_ok=True)
+        enriched_df.to_csv(os.path.join(step_dir, "enriched_panel.csv"), index=False)
+        summary_df.to_csv(os.path.join(step_dir, "regime_summary.csv"), index=False)
+
+        # Generate plots
+        for plot_fn, fname, kwargs in [
+            (plot_regime_scatter, "regime_scatter.png", {"enriched_df": enriched_df}),
+            (plot_regime_paths, "regime_paths.png", {"enriched_df": enriched_df, "n_agents": 5}),
+            (plot_transition_matrix, "transition_matrix.png",
+             {"transition_matrix": trans_matrix, "transition_labels": trans_labels}),
+            (plot_switch_distribution, "switch_distribution.png", {"switch_counts": switch_counts}),
+            (plot_regime_summary, "regime_summary.png", {"summary_df": summary_df}),
+        ]:
+            try:
+                fig = plot_fn(**kwargs, save_path=os.path.join(step_dir, fname))
+                plt.close(fig)
+            except Exception:
+                pass
+
+        print(f"\n[regime] Step {step}: {n_regime}/{n_total} classified, "
+              f"high={frac_high:.1%}, low={frac_low:.1%}")
+
+    except Exception as e:
+        print(f"\n[regime] Background analysis failed at step {step}: {e}")
+
+
 def train(config, run):
     """
     The main training loop.
@@ -222,7 +295,9 @@ def train(config, run):
         n_agents=config.training.agents,
     )
     plot_data_panel_dir = os.path.join(base_checkpoint_dir, "plot_data", "panel")
+    regime_analysis_dir = os.path.join(base_checkpoint_dir, "plot_data", "regime_analysis")
     os.makedirs(plot_data_panel_dir, exist_ok=True)
+    os.makedirs(regime_analysis_dir, exist_ok=True)
     
     # --- 3.5 Plot initial state distributions before training ---
     print("Plotting initial state distributions...")
@@ -506,6 +581,16 @@ def train(config, run):
                 }, step=step)
             except Exception as e:
                 print(f"[regime tracking] Lightweight clustering failed at step {step}: {e}")
+
+            # ==== FULL REGIME ANALYSIS: Run in background thread ====
+            if panel_buffer._count >= 50:  # Need enough panel history
+                panel_df_snapshot = panel_buffer.to_dataframe()
+                t = threading.Thread(
+                    target=_run_regime_analysis_background,
+                    args=(panel_df_snapshot, step, regime_analysis_dir),
+                    daemon=True,
+                )
+                t.start()
 
         # CRITICAL: Clear temporary variables to prevent memory leaks
         # Delete tensors that have computational graphs attached

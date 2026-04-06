@@ -252,6 +252,75 @@ The decision rule plots help you understand:
 - **Precautionary savings**: How agents save for future uncertainty
 - **Policy heterogeneity**: Whether different agents have learned different strategies
 
+## Tracking Regime Dynamics
+
+The framework automatically tracks behavioral regime clustering (high-saving vs. low-saving agents) during and after training.
+
+### During Training (Automatic)
+
+Two things run at every `cluster_interval` steps (default: 5000):
+
+1. **Lightweight GMM snapshot** — fast cross-sectional clustering on the current batch, logged to W&B as:
+   - `regime/fraction_high`, `regime/fraction_low`
+   - `regime/separation_score`, `regime/bic_k2`, `regime/aic_k2`
+
+2. **Full `RegimeAnalyzer` pipeline** — runs in a background thread (does not block training) once the panel buffer has ≥50 steps of history. Results are saved to:
+   ```
+   checkpoints/{run_name}/plot_data/regime_analysis/step_{N}/
+     enriched_panel.csv       # Panel with regime labels
+     regime_summary.csv       # Per-regime mean/std/quantiles
+     regime_scatter.png
+     regime_paths.png
+     transition_matrix.png
+     switch_distribution.png
+     regime_summary.png
+   ```
+
+Panel data (ring buffer, last `panel_buffer_size=200` steps) is saved at every checkpoint:
+```
+checkpoints/{run_name}/plot_data/panel/panel_step_{N}.npz
+```
+
+### After Training
+
+Run the standalone script for a full analysis including robustness checks (BIC/AIC across K and filter settings):
+
+```bash
+python run_cluster_analysis.py \
+  --panel_npz checkpoints/{run_name}/plot_data/panel/panel_step_{final_step}.npz \
+  --output_dir checkpoints/{run_name}/plot_data/regime_analysis/final
+```
+
+Key flags:
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ability_cutoff_quantile` | `0.5` | Lower → include more agents in analysis |
+| `--labor_upper` | `0.95` | Upper bound on labor to filter constrained agents |
+| `--n_components` | `2` | Number of GMM clusters |
+| `--skip_robustness` | off | Skip BIC/AIC grid (faster) |
+| `--no_plots` | off | Skip plot generation |
+
+Check `robustness_bic.csv` to confirm K=2 has lower BIC than K=1 and K=3 before trusting the classification.
+
+### Reconstructing Full Training History
+
+The ring buffer only holds the last 200 steps per checkpoint, but NPZ files across checkpoints can be stitched together:
+
+```python
+import pandas as pd
+from src.cluster_analysis import PanelBuffer
+
+dfs = []
+for step in [5000, 10000, 15000, ...]:
+    buf = PanelBuffer.from_npz(f"checkpoints/{run_name}/plot_data/panel/panel_step_{step}.npz")
+    dfs.append(buf.to_dataframe())
+
+full_df = pd.concat(dfs).drop_duplicates(subset=['agent_id', 'time'])
+# Then pass full_df to RegimeAnalyzer for the complete trajectory
+```
+
+---
+
 ## Comparing Runs
 
 After training multiple configs, use `compare_runs.py` to overlay or grid decision rules and input-output plots from different runs side by side. Numerical plot data (`.npz`) is saved automatically during training under `checkpoints/{run_name}/plot_data/`.
