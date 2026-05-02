@@ -28,6 +28,7 @@ from src.policy_evaluation import (
 from src.plot_data_io import save_input_output_data, save_run_meta, save_panel_data
 from src.utils.economics import flow_utility
 from src.cluster_analysis import PanelBuffer, RegimeAnalyzer, lightweight_cluster_snapshot
+from src.focal_agent_tracker import FocalAgentTracker
 from src.cluster_visualization import (
     plot_regime_scatter,
     plot_regime_paths,
@@ -173,7 +174,7 @@ def _run_regime_analysis_background(panel_df, step, output_dir):
             'regime_full/fraction_low': frac_low,
             'regime_full/classified': n_regime,
             'regime_full/total': n_total,
-        }, step=step)
+        })
 
         # Save CSVs
         step_dir = os.path.join(output_dir, f"step_{step}")
@@ -308,6 +309,16 @@ def train(config, run):
         step=0
     )
 
+    # --- 3.6 Initialize FocalAgentTracker ---
+    focal_tracker = FocalAgentTracker.initialize(
+        main_state,
+        max_steps=config.training.training_steps,
+        n_ability_groups=5,
+        n_per_group=10,
+    )
+    focal_tracker_dir = os.path.join(base_checkpoint_dir, "focal_trajectories")
+    os.makedirs(focal_tracker_dir, exist_ok=True)
+
     # --- 4. Training Loop ---
     print("Starting training loop with environment stepping...")
 
@@ -324,6 +335,8 @@ def train(config, run):
         # 2. Create TemporaryState with realized outcomes
         # 3. Transition to ParallelState A and B with different shocks
         # 4. Compute outcomes for both branches, choose one to commit
+
+        a_t_pre = main_state.savings.detach().cpu().numpy()  # (B, A) — a_t before decision
 
         main_state, temp_state, (parallel_A, outcomes_A), (parallel_B, outcomes_B) = env.step(
             main_state=main_state,
@@ -423,12 +436,12 @@ def train(config, run):
             plot_data = prepare_data_for_plotting(main_state, temp_state)
 
             # Generate scatter plot with W&B logging (uses all batches by default)
-            plot_decision_rules_scatter(
-                plot_data,
-                save_path=os.path.join(base_checkpoint_dir, f"decision_rules_step_{step}.png"),
-                log_to_wandb=True,
-                step=step
-            )
+            # plot_decision_rules_scatter(
+            #     plot_data,
+            #     save_path=os.path.join(base_checkpoint_dir, f"decision_rules_step_{step}.png"),
+            #     log_to_wandb=True,
+            #     step=step
+            # )
 
             # Generate binned plot with W&B logging (uses all batches by default)
             plot_binned_decision_rules(
@@ -449,36 +462,36 @@ def train(config, run):
 
             # ==== NEW: Synthetic Grid Decision Rule Plots (A1, B1) ====
             # Only generate if we have collected enough data
-            if historical_ranges.m_t.count > 0:
-                print(f"Generating synthetic grid decision rule plots...")
-                # Create reference state from current simulation for GE-aware evaluation
-                # This uses actual tensors as background population (detached from graph)
-                reference_state = {
-                    "money": money_disposable_t.detach(),  # (B, A)
-                    "ability": ability_t.detach(),  # (B, A)
-                }
-                evaluator = PolicyEvaluator(
-                    policy_net=policy_net,
-                    normalizer=normalizer,
-                    ranges=historical_ranges,
-                    tax_params=main_state.tax_params[0],  # Use first batch's tax params
-                    n_agents=config.training.agents,  # Pass n_agents for proper input shape
-                    device=device,
-                    reference_state=reference_state,  # Pass actual GE simulation data
-                    config=config,  # Pass config for computing m_t from a_t
-                    agent_idx=0,  # Focus on agent 0 for visualization
-                    use_agent_specific_range=True  # Use agent 0's explored range for x-axis
-                )
-                plot_all_decision_rules(
-                    evaluator=evaluator,
-                    save_dir=os.path.join(base_checkpoint_dir, "decision_rules"),
-                    log_to_wandb=True,
-                    step=step,
-                    plots=["A1", "A1-1", "B1", "A1-1h", "H1", "H1-h"],  # Specify which plots to generate
-                    v_bar=main_state.v_bar.detach().cpu().numpy().flatten(),
-                    data_save_dir=plot_data_grid_dir,
-                    exp_name=run_name
-                )
+            # if historical_ranges.m_t.count > 0:
+            #     print(f"Generating synthetic grid decision rule plots...")
+            #     # Create reference state from current simulation for GE-aware evaluation
+            #     # This uses actual tensors as background population (detached from graph)
+            #     reference_state = {
+            #         "money": money_disposable_t.detach(),  # (B, A)
+            #         "ability": ability_t.detach(),  # (B, A)
+            #     }
+            #     evaluator = PolicyEvaluator(
+            #         policy_net=policy_net,
+            #         normalizer=normalizer,
+            #         ranges=historical_ranges,
+            #         tax_params=main_state.tax_params[0],  # Use first batch's tax params
+            #         n_agents=config.training.agents,  # Pass n_agents for proper input shape
+            #         device=device,
+            #         reference_state=reference_state,  # Pass actual GE simulation data
+            #         config=config,  # Pass config for computing m_t from a_t
+            #         agent_idx=0,  # Focus on agent 0 for visualization
+            #         use_agent_specific_range=True  # Use agent 0's explored range for x-axis
+            #     )
+            #     plot_all_decision_rules(
+            #         evaluator=evaluator,
+            #         save_dir=os.path.join(base_checkpoint_dir, "decision_rules"),
+            #         log_to_wandb=True,
+            #         step=step,
+            #         plots=["A1", "A1-1", "B1", "A1-1h", "H1", "H1-h"],  # Specify which plots to generate
+            #         v_bar=main_state.v_bar.detach().cpu().numpy().flatten(),
+            #         data_save_dir=plot_data_grid_dir,
+            #         exp_name=run_name
+            #     )
 
             # ==== Direct Input-Output Visualization ====
             print(f"Generating direct input-output plots...")
@@ -527,9 +540,22 @@ def train(config, run):
                 save_path=os.path.join(base_checkpoint_dir, f"input_output_pairwise_step_{step}.png"),
                 log_to_wandb=True, step=step
             )
-            plot_input_output_pca(
-                features_snap, zeta_snap, mu_snap, labor_snap,
-                save_path=os.path.join(base_checkpoint_dir, f"input_output_pca_step_{step}.png"),
+            # plot_input_output_pca(
+            #     features_snap, zeta_snap, mu_snap, labor_snap,
+            #     save_path=os.path.join(base_checkpoint_dir, f"input_output_pca_step_{step}.png"),
+            #     log_to_wandb=True, step=step
+            # )
+
+            # ==== Focal agent overlay plot (second copy with tracked agents highlighted) ====
+            focal_overlay = focal_tracker.current_plot_overlay(
+                features_snap, zeta_snap, mu_snap, labor_snap
+            )
+            plot_input_output_pairwise(
+                features_snap, zeta_snap, mu_snap, labor_snap, normalizer,
+                per_agent_losses=per_agent_losses,
+                utility=utility,
+                focal_overlay=focal_overlay,
+                save_path=os.path.join(base_checkpoint_dir, f"input_output_focal_step_{step}.png"),
                 log_to_wandb=True, step=step
             )
 
@@ -564,33 +590,36 @@ def train(config, run):
         })
 
         # ==== LIGHTWEIGHT CLUSTERING: Periodic cross-sectional GMM snapshot ====
-        if step % cluster_interval == 0 and step > 0:
-            try:
-                cluster_result = lightweight_cluster_snapshot(
-                    ability=ability_t.detach().cpu().numpy().flatten(),
-                    saving_ratio=savings_ratio_t.detach().cpu().numpy().flatten(),
-                    mu=mu_t.detach().cpu().numpy().flatten(),
-                    labor=labor_t.detach().cpu().numpy().flatten(),
-                )
-                wandb.log({
-                    'regime/fraction_high':    cluster_result['regime_fraction_high'],
-                    'regime/fraction_low':     cluster_result['regime_fraction_low'],
-                    'regime/separation_score': cluster_result['separation_score'],
-                    'regime/bic_k2':           cluster_result['bic'],
-                    'regime/aic_k2':           cluster_result['aic'],
-                }, step=step)
-            except Exception as e:
-                print(f"[regime tracking] Lightweight clustering failed at step {step}: {e}")
+        # if step % cluster_interval == 0 and step > 0:
+        #     try:
+        #         cluster_result = lightweight_cluster_snapshot(
+        #             ability=ability_t.detach().cpu().numpy().flatten(),
+        #             saving_ratio=savings_ratio_t.detach().cpu().numpy().flatten(),
+        #             mu=mu_t.detach().cpu().numpy().flatten(),
+        #             labor=labor_t.detach().cpu().numpy().flatten(),
+        #         )
+        #         wandb.log({
+        #             'regime/fraction_high':    cluster_result['regime_fraction_high'],
+        #             'regime/fraction_low':     cluster_result['regime_fraction_low'],
+        #             'regime/separation_score': cluster_result['separation_score'],
+        #             'regime/bic_k2':           cluster_result['bic'],
+        #             'regime/aic_k2':           cluster_result['aic'],
+        #         }, step=step)
+        #     except Exception as e:
+        #         print(f"[regime tracking] Lightweight clustering failed at step {step}: {e}")
 
-            # ==== FULL REGIME ANALYSIS: Run in background thread ====
-            if panel_buffer._count >= 50:  # Need enough panel history
-                panel_df_snapshot = panel_buffer.to_dataframe()
-                t = threading.Thread(
-                    target=_run_regime_analysis_background,
-                    args=(panel_df_snapshot, step, regime_analysis_dir),
-                    daemon=True,
-                )
-                t.start()
+        #     # ==== FULL REGIME ANALYSIS: Run in background thread ====
+        #     if panel_buffer._count >= 50:  # Need enough panel history
+        #         panel_df_snapshot = panel_buffer.to_dataframe()
+        #         t = threading.Thread(
+        #             target=_run_regime_analysis_background,
+        #             args=(panel_df_snapshot, step, regime_analysis_dir),
+        #             daemon=True,
+        #         )
+        #         t.start()
+
+        # ==== FOCAL AGENT TRACKER: record every step ====
+        focal_tracker.record(step, a_t_pre, temp_state)
 
         # CRITICAL: Clear temporary variables to prevent memory leaks
         # Delete tensors that have computational graphs attached
@@ -603,6 +632,9 @@ def train(config, run):
 
         # --- 5. Save checkpoints periodically ---
         if step % config.training.save_interval == 0:
+            focal_tracker.save(
+                os.path.join(focal_tracker_dir, f"focal_step_{step}.npz")
+            )
             print(f"Saving checkpoint at step {step}...")
             torch.save(policy_net.state_dict(), os.path.join(weights_dir, f"model_step_{step}.pt"))
             torch.save(main_state, os.path.join(states_dir, f"state_step_{step}.pt"))

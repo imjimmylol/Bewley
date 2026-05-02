@@ -2,12 +2,12 @@
 # Incomplete markets (high uncertainty σ_v=0.5), non-linear (progressive/HSV-style) tax
 
 # Experiment name
-exp_name: "Bewley_Hetero_ability_low_uncer_nonlinear_HardNorm"
+exp_name: "Bewley_Hetero_ability_low_uncer_nonlinear_HardNorm-focal-aggregate"
 
 training:
-  agents: 50
+  agents: 1000
   learning_rate: 1e-4
-  training_steps: 50000
+  training_steps: 30000
   batch_size: 32
   display_step: 5000
   plot_interval: 500

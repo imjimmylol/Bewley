@@ -314,7 +314,10 @@ def plot_io_comparison(
             ax.set_ylabel(out_label, fontsize=9)
             ax.grid(True, alpha=0.3)
 
-    axes[0, 0].legend(fontsize=6, markerscale=5, loc="best", ncol=len(datasets))
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, fontsize=6, markerscale=5,
+               bbox_to_anchor=(1.01, 0.98), loc="upper left",
+               ncol=1, framealpha=0.9)
 
     # ---- Utility row: own_money vs utility, own_ability vs utility ----
     if has_utility:
@@ -353,7 +356,7 @@ def plot_io_comparison(
             ax.set_ylabel(r"$u(c,l)$ (flow utility)", fontsize=9)
             ax.grid(True, alpha=0.3)
 
-        axes[utility_row, 0].legend(fontsize=6, markerscale=5, loc="best", ncol=len(datasets))
+        # legend already rendered as figure-level legend above
         axes[utility_row, 2].set_visible(False)
 
     # ---- Loss row: Mean losses per ability quintile ----
@@ -403,6 +406,7 @@ def plot_io_comparison(
 
     fig.suptitle("Input-Output Comparison (overlaid)", fontsize=14, fontweight="bold")
     plt.tight_layout()
+    plt.subplots_adjust(right=0.83)
     return fig
 
 

@@ -71,6 +71,7 @@ def transition_ability(
     p: float,
     q: float,
     superstar_multiplier: float = 10.0,
+    eps_clip_k: float = 3.0,
     fix: bool = False,
     *,
     deterministic: bool = False
@@ -125,8 +126,10 @@ def transition_ability(
         # No shock: use conditional mean
         log_v_tp1 = (1 - rho_v) * log_v_bar + rho_v * log_v_t
     else:
-        # Stochastic: add normal shock
+        # Stochastic: add normal shock, clipped to ±k*sigma to prevent
+        # implausible ability jumps within a lifetime
         eps = torch.randn(B, A, device=device) * sigma_v
+        eps = eps.clamp(-eps_clip_k * sigma_v, eps_clip_k * sigma_v)
         log_v_tp1 = (1 - rho_v) * log_v_bar + rho_v * log_v_t + eps
 
     # 3. Transform back to level
@@ -240,6 +243,10 @@ def transition_ability_with_history(
     # Optional: superstar multiplier (can be added to config)
     if hasattr(config.shock, 'superstar_multiplier'):
         shock_params['superstar_multiplier'] = config.shock.superstar_multiplier
+
+    # Optional: shock clipping (default 3.0 — prevents implausible lifetime ability jumps)
+    if hasattr(config.shock, 'eps_clip_k'):
+        shock_params['eps_clip_k'] = config.shock.eps_clip_k
 
     # Extract fix parameter from bewley_model config
     if hasattr(config.bewley_model, 'fix'):

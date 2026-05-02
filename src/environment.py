@@ -157,6 +157,9 @@ class EconomyEnv:
             wage: Market wage (B, A) or (B,)
             ret: Return to capital (B, A) or (B,)
         """
+        # savings_agg = savings.mean(dim=(0, 1), keepdim=True)
+        # labor_eff_agg = (labor * ability).mean(dim=(0, 1), keepdim=True)
+
         savings_agg = savings.mean(dim=1, keepdim=True)
         labor_eff_agg = (labor * ability).mean(dim=1, keepdim=True)
 

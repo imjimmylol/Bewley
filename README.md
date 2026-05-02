@@ -3,7 +3,7 @@
 # Bewley Model Training Framework
 
 This project provides a structured framework for training models, specifically tailored for experiments like the Bewley model. It is designed to be flexible, allowing for both single runs with a specific configuration and automated hyperparameter sweeps using Weights & Biases (W&B).
-
+ß
 The structure is based on the `GEMINI.md` guidelines.
 
 ## Project Structure

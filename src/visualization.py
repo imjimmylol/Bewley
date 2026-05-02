@@ -1867,6 +1867,7 @@ def plot_input_output_pairwise(
     normalizer,
     per_agent_losses: Optional[Dict[str, np.ndarray]] = None,
     utility: Optional[np.ndarray] = None,
+    focal_overlay: Optional[dict] = None,
     save_path: Optional[str] = None,
     log_to_wandb: bool = False,
     step: Optional[int] = None,
@@ -1886,6 +1887,10 @@ def plot_input_output_pairwise(
         normalizer: RunningPerAgentWelford instance for denormalization
         per_agent_losses: Optional dict of per-agent loss arrays (flattened to N,).
             Keys: "fb", "euler", "labor_foc". Values: np.ndarray of shape (B*A,).
+        focal_overlay: Optional dict from FocalAgentTracker.current_plot_overlay().
+            Keys: norm_money, norm_ability, zeta, mu, labor, group_ids, colors,
+                  n_groups, group_labels.  Agents are drawn as large star markers
+                  on top of the background scatter, colored by ability group.
         save_path: Where to save the plot
         log_to_wandb: Log to wandb
         step: Training step
@@ -1938,6 +1943,18 @@ def plot_input_output_pairwise(
     ability_edges = np.percentile(own_ability, [0, 20, 40, 60, 80, 100])
     ability_bins = np.digitize(own_ability, ability_edges[1:-1])
 
+    # Pre-extract focal x/y arrays indexed by (row, col) for overlay
+    focal_x = {}   # (row) -> norm_money or norm_ability
+    focal_y = {}   # (row, col) -> zeta / mu / labor
+    if focal_overlay is not None:
+        fo = focal_overlay
+        focal_x[0] = fo["norm_money"]
+        focal_x[1] = fo["norm_ability"]
+        focal_y_outputs = [fo["zeta"], fo["mu"], fo["labor"]]
+        for r in range(2):
+            for c in range(3):
+                focal_y[(r, c)] = focal_y_outputs[c]
+
     for row in range(2):
         x_label, x_data, mean, std = inputs[row]
         # Color by the OTHER input's quintile
@@ -1956,6 +1973,27 @@ def plot_input_output_pairwise(
                     c=q_colors[qi], alpha=0.15, s=3, rasterized=True,
                     label=f"{other_label} {q_labels[qi]}" if col == 0 else None
                 )
+
+            # ---- Focal agent overlay ----
+            if focal_overlay is not None:
+                fo = focal_overlay
+                fx = focal_x[row]
+                fy = focal_y[(row, col)]
+                n_groups = fo["n_groups"]
+                group_ids = fo["group_ids"]
+                group_labels = fo["group_labels"]
+                for g in range(n_groups):
+                    mask_g = group_ids == g
+                    if mask_g.sum() == 0:
+                        continue
+                    from src.focal_agent_tracker import GROUP_COLORS
+                    color = GROUP_COLORS[g % len(GROUP_COLORS)]
+                    ax.scatter(
+                        fx[mask_g], fy[mask_g],
+                        c=color, s=80, marker="*", zorder=5,
+                        edgecolors="white", linewidths=0.5,
+                        label=group_labels[g] if col == 0 else None,
+                    )
 
             ax.set_xlabel(x_label, fontsize=9)
             ax.set_ylabel(y_label, fontsize=9)
