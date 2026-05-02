@@ -133,7 +133,8 @@ class EconomyEnv:
         it = ibt - (1 - self.config.tax_params.tax_income) * \
             (ibt**(1-self.config.tax_params.income_tax_elasticity)/(1-self.config.tax_params.income_tax_elasticity))
 
-        at = abt - ((1-self.config.tax_params.tax_saving)/(1-self.config.tax_params.saving_tax_elasticity))
+        at = abt - ((1-self.config.tax_params.tax_saving)/(1-self.config.tax_params.saving_tax_elasticity)) \
+            * (abt**(1-self.config.tax_params.saving_tax_elasticity))
 
         return it, at
 
