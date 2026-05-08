@@ -219,8 +219,9 @@ class EconomyEnv:
         ibt = wage * labor * ability + (1 - self.config.bewley_model.delta + ret_lagged) * savings  # before-tax income
         # - Apply tax functions
         it, at = self._taxfunc(ibt=ibt, abt=savings)
-        # - Compute disposable money
-        money_disposable = (ibt-it) + (savings-at) 
+        # - Compute disposable money: ibt already contains (1-δ+ret)*savings,
+        #   so subtracting both taxes gives the correct budget constraint.
+        money_disposable = ibt - it - at
 
         return {
             "money_disposable":money_disposable, 

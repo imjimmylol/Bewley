@@ -90,6 +90,10 @@ class TrainingMonitor:
         metrics['wage_mean'] = temp_state.wage.mean().item()
         metrics['ret_mean'] = temp_state.ret.mean().item()
 
+        # === EFFECTIVE RETURN (after taxes) ===
+        market_metrics = self._compute_effective_return(temp_state)
+        metrics.update(market_metrics)
+
         # === RAW STATE VALUES (for debugging) ===
         metrics['money_raw_mean'] = main_state.moneydisposable.mean().item()
         metrics['ability_raw_mean'] = main_state.ability.mean().item()
@@ -126,6 +130,54 @@ class TrainingMonitor:
         metrics.update(correlation_metrics)
 
         return metrics
+
+    def _compute_effective_return(self, temp_state):
+        """
+        Compute the after-tax marginal return on savings that agents actually face.
+
+        From the budget constraint  m = ibt - T_y(ibt) - T_s(a),  saving 1 extra
+        unit of a_{t+1} today yields next period:
+
+            ∂m_{t+1}/∂a_{t+1}  =  (1−δ+ret) · (1−τ_y) · ibt^{−ε_y}
+                                 −  [1 − (1−τ_s) · a^{−ε_s}]
+                                 ────────────────────────────────────
+                                 gross capital factor  ×  share kept   minus  marginal wealth tax
+
+        At steady state the Euler equation requires  β · F_eff = 1,
+        so  F_eff → 1/β ≈ 1.042.  Tracking this is the right way to judge
+        convergence: raw ret is the BEFORE-tax MPK and can legitimately be >1
+        when progressive taxes have a high marginal rate on capital income.
+        """
+        tau_y  = self.config.tax_params.tax_income
+        eps_y  = self.config.tax_params.income_tax_elasticity
+        tau_s  = self.config.tax_params.tax_saving
+        eps_s  = self.config.tax_params.saving_tax_elasticity
+        delta  = self.config.bewley_model.delta
+        beta   = self.config.bewley_model.beta
+
+        ret     = temp_state.ret                   # (B, A)  gross MPK
+        ibt     = temp_state.income_before_tax     # (B, A)
+        savings = temp_state.savings               # (B, A)  a_{t+1}
+
+        ibt_safe     = torch.clamp(ibt,     min=1e-6)
+        savings_safe = torch.clamp(savings, min=1e-6)
+
+        # Share of one unit of ibt kept after marginal income tax  (= 1 − MRT_y)
+        after_income_tax_share = (1 - tau_y) * ibt_safe.pow(-eps_y)
+
+        # Marginal wealth tax rate  MRT_s  =  1 − (1−τ_s)·a^{−ε_s}
+        mrt_savings = 1.0 - (1 - tau_s) * savings_safe.pow(-eps_s)
+
+        # Effective return factor F:  β·F = 1 at steady state
+        F = (1 - delta + ret) * after_income_tax_share - mrt_savings
+        euler_gap = beta * F - 1.0   # → 0 at convergence
+
+        return {
+            'effective_return_factor': F.mean().item(),
+            'euler_gap': euler_gap.mean().item(),          # target: 0
+            'mrt_income': (1 - after_income_tax_share).mean().item(),
+            'mrt_savings': mrt_savings.mean().item(),
+        }
 
     def _verify_budget_constraint(self, temp_state):
         """
@@ -280,7 +332,11 @@ class TrainingMonitor:
         print(f"    - Mean savings: {metrics['savings_mean']:.3f}")
         print(f"    - Mean ability: {metrics['ability_mean']:.3f}")
         print(f"    - Market wage: {metrics['wage_mean']:.3f}")
-        print(f"    - Market return: {metrics['ret_mean']:.4f}")
+        print(f"    - Market return (gross MPK):    {metrics['ret_mean']:.4f}")
+        print(f"    - Effective return factor F:    {metrics['effective_return_factor']:.4f}  (target 1/β={1/self.config.bewley_model.beta:.4f})")
+        print(f"    - Euler gap β·F−1:              {metrics['euler_gap']:.4f}  (target 0)")
+        print(f"    - Marginal income tax on cap:   {metrics['mrt_income']:.3f}")
+        print(f"    - Marginal wealth tax:          {metrics['mrt_savings']:.3f}")
 
         print(f"  Normalizer Health Check:")
         print(f"    - Money: normalizer_mean={metrics['money_norm_mean']:.3f}, "
@@ -346,7 +402,11 @@ class TrainingMonitor:
 
             # Market variables
             "market/wage": metrics['wage_mean'],
-            "market/return": metrics['ret_mean'],
+            "market/return_gross_mpk": metrics['ret_mean'],
+            "market/effective_return_factor": metrics['effective_return_factor'],
+            "market/euler_gap": metrics['euler_gap'],
+            "market/mrt_income": metrics['mrt_income'],
+            "market/mrt_savings": metrics['mrt_savings'],
 
             # Agent actions
             "actions/mu_mean": metrics['mu_mean'],

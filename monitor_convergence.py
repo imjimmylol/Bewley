@@ -31,6 +31,8 @@ from src.environment import EconomyEnv
 from src.normalizer import HardNormalizer, RunningPerAgentWelford
 from src.models.model import FiLMResNet2In
 from src.utils.configloader import load_configs, dict_to_namespace, compute_derived_params
+from src.calloss import LossCalculator
+from src.calloss import AuxLossMu
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1.  Checkpoint loading helpers
@@ -145,7 +147,7 @@ def _binned_c_m(m: np.ndarray, c: np.ndarray, n_bins: int = 30):
 
 def run_simulation(env, policy_net, main_state,
                    n_steps: int, snapshot_every: int,
-                   fix_ability: bool):
+                   fix_ability: bool, config=None):
     """
     Run the economy forward for ``n_steps`` periods with a *frozen* policy.
 
@@ -165,7 +167,13 @@ def run_simulation(env, policy_net, main_state,
             }
     """
     policy_net.eval()
-    snapshots = []
+    snapshots    = []
+    total_losses = []
+
+    loss_calc = (
+        LossCalculator(config, device=str(next(policy_net.parameters()).device))
+        if config is not None else None
+    )
 
     print(f"\nRunning {n_steps} simulation steps (snapshot every {snapshot_every})…")
     with torch.no_grad():
@@ -178,6 +186,24 @@ def run_simulation(env, policy_net, main_state,
                 update_normalizer=False,
                 commit_strategy="random",
             )
+
+            if loss_calc is not None:
+                losses = loss_calc.compute_all_losses(
+                    consumption_t=temp_state.consumption,
+                    labor_t=temp_state.labor,
+                    ibt=temp_state.income_before_tax,
+                    savings_ratio_t=temp_state.savings_ratio,
+                    mu_t=temp_state.mu,
+                    wage_t=temp_state.wage,
+                    ret_t=temp_state.ret,
+                    money_disposable_t=temp_state.money_disposable,
+                    ability_t=temp_state.ability,
+                    consumption_A_tp1=oA["consumption"],
+                    consumption_B_tp1=oB["consumption"],
+                    ibt_A_tp1=oA["income_before_tax"],
+                    ibt_B_tp1=oB["income_before_tax"],
+                )
+                total_losses.append(losses["total"].item())
 
             if step % snapshot_every == 0 or step == 1:
                 m_np    = temp_state.money_disposable.detach().cpu().numpy().flatten()
@@ -198,13 +224,18 @@ def run_simulation(env, policy_net, main_state,
                 })
 
                 if step % (snapshot_every * 10) == 0:
+                    loss_str = f"  loss={total_losses[-1]:.4f}" if total_losses else ""
                     print(f"  step {step:5d}  |  mean(m)={m_np.mean():.3f}"
                           f"  mean(c)={c_np.mean():.3f}"
-                          f"  wage={wage_np:.4f}  ret={ret_np:.4f}")
+                          f"  wage={wage_np:.4f}  ret={ret_np:.4f}{loss_str}")
 
             del temp_state, pA, pB, oA, oB
 
     print(f"Simulation complete.  Collected {len(snapshots)} snapshots.")
+    if total_losses:
+        final_loss = float(np.mean(total_losses[-max(1, len(total_losses)//10):]))
+        print(f"  final loss (last 10% avg):  {final_loss:.6f}")
+
     return snapshots
 
 
@@ -460,6 +491,7 @@ def main():
         n_steps=args.n_sim_steps,
         snapshot_every=args.snapshot_every,
         fix_ability=fix_ability,
+        config=config,
     )
 
     # ── 6. Plot ───────────────────────────────────────────────────────────
