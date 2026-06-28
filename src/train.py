@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from src.env_state import MainState
 from src.environment import EconomyEnv
-from src.normalizer import RunningPerAgentWelford, HardNormalizer
+from src.normalizer import Normalizer, make_normalizer, MONEY_KEY
 from src.models.model import FiLMResNet2In
 from src.calloss import LossCalculator
 from src.monitoring import TrainingMonitor
@@ -249,19 +249,7 @@ def train(config, run):
     else torch.device("cpu")
     )
     print(f"Using device: {device}")
-    # --- Normalizer selection (controlled by config.training.normalizer) ---
-    norm_type = getattr(config.training, 'normalizer', 'welford')
-    if norm_type == 'hard':
-        # Hard normalization: fixed bounds → [0, 1]
-        # ability uses config bounds; money_disposable tracks running max
-        v_min = getattr(config.initial_state, 'v_min', 0)
-        v_max = getattr(config.initial_state, 'v_max', 100)
-        normalizer = HardNormalizer(fixed_bounds={"ability": (v_min, v_max)})
-        print(f"Using HardNormalizer (ability: [{v_min:.4f}, {v_max:.4f}], moneydisposable: running)")
-    else:
-        # Welford (running mean/std, maps to ~N(0,1))
-        normalizer = RunningPerAgentWelford(batch_dim=0, agent_dim=None)
-        print(f"Using Welford normalizer (global mode)")
+    normalizer = make_normalizer(config)
     env = EconomyEnv(config, normalizer, device=device)
     policy_net = FiLMResNet2In(
         state_dim=2*config.training.agents+2,
@@ -526,7 +514,7 @@ def train(config, run):
 
             # Compute utility from snapshot (consistent with plotted zeta/labor)
             # Denormalize money from snapshot features, then c = m * (1 - zeta)
-            money_snap = normalizer.denormalize("moneydisposalbe", features_snap[..., -2])  # (B, A)
+            money_snap = normalizer.denormalize(MONEY_KEY, features_snap[..., -2])  # (B, A)
             consumption_snap = money_snap * (1.0 - zeta_snap)
             utility = flow_utility(
                 consumption_snap, labor_snap,

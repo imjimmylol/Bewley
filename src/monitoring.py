@@ -6,6 +6,7 @@ Training monitoring module for logging metrics, correlations, and debugging info
 import wandb
 import numpy as np
 import torch
+from src.normalizer import MONEY_KEY
 
 
 class TrainingMonitor:
@@ -212,28 +213,21 @@ class TrainingMonitor:
         """
         metrics = {}
 
-        # Money statistics from normalizer (only available for Welford normalizer)
-        has_welford_stats = hasattr(self.normalizer, '_stats')
-        if has_welford_stats and "moneydisposalbe" in self.normalizer._stats:
-            money_norm_stats = self.normalizer._stats["moneydisposalbe"]
-            money_norm_mean = money_norm_stats.mean.mean().item()
-            money_norm_std = torch.sqrt(
-                money_norm_stats.M2 / torch.clamp(money_norm_stats.count - 1, min=1.0)
-            ).mean().item()
-            money_norm_count = money_norm_stats.count.mean().item()
+        summary = self.normalizer.stats_summary()
+
+        if MONEY_KEY in summary:
+            money_norm_mean = summary[MONEY_KEY].mean
+            money_norm_std = summary[MONEY_KEY].std
+            money_norm_count = summary[MONEY_KEY].count
         else:
             money_norm_mean = 0.0
             money_norm_std = 1.0
             money_norm_count = 0.0
 
-        # Ability statistics from normalizer
-        if has_welford_stats and "ability" in self.normalizer._stats:
-            ability_norm_stats = self.normalizer._stats["ability"]
-            ability_norm_mean = ability_norm_stats.mean.mean().item()
-            ability_norm_std = torch.sqrt(
-                ability_norm_stats.M2 / torch.clamp(ability_norm_stats.count - 1, min=1.0)
-            ).mean().item()
-            ability_norm_count = ability_norm_stats.count.mean().item()
+        if "ability" in summary:
+            ability_norm_mean = summary["ability"].mean
+            ability_norm_std = summary["ability"].std
+            ability_norm_count = summary["ability"].count
         else:
             ability_norm_mean = 0.0
             ability_norm_std = 1.0

@@ -1,8 +1,17 @@
 # normalizer.py
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Tuple, Optional
 import torch
 from torch import Tensor
+
+MONEY_KEY = "moneydisposalbe"  # intentional typo preserved for checkpoint compatibility
+
+@dataclass
+class VarStats:
+    mean: float
+    std: float
+    count: float
 
 @dataclass
 class _Stats:
@@ -14,7 +23,38 @@ class _Stats:
 # Keep old name as alias for backward compatibility
 _PerAgentStats = _Stats
 
-class RunningPerAgentWelford:
+
+class Normalizer(ABC):
+    """Formal seam for normalizer implementations."""
+
+    @abstractmethod
+    def transform(self, name: str, x: Tensor, *, update: bool) -> Tensor: ...
+
+    @abstractmethod
+    def denormalize(self, name: str, y: Tensor) -> Tensor: ...
+
+    @abstractmethod
+    def stats_summary(self) -> Dict[str, VarStats]:
+        """Return per-variable normalization statistics for monitoring."""
+        ...
+
+    @abstractmethod
+    def state_dict(self) -> Dict[str, Tensor]: ...
+
+    @abstractmethod
+    def load_state_dict(self, sd: Dict[str, Tensor]) -> None: ...
+
+    @abstractmethod
+    def save(self, path: str) -> None: ...
+
+    @abstractmethod
+    def load(self, path: str) -> None: ...
+
+    @abstractmethod
+    def to(self, device) -> "Normalizer": ...
+
+
+class RunningPerAgentWelford(Normalizer):
     """
     Running normalization with Welford's algorithm.
 
@@ -211,6 +251,15 @@ class RunningPerAgentWelford:
             stats.M2 = stats.M2.to(device)
         return self
 
+    def stats_summary(self) -> Dict[str, VarStats]:
+        out: Dict[str, VarStats] = {}
+        for name, s in self._stats.items():
+            mean = s.mean.mean().item()
+            std = torch.sqrt(s.M2 / torch.clamp(s.count - 1.0, min=1.0)).mean().item()
+            count = s.count.mean().item()
+            out[name] = VarStats(mean=mean, std=std, count=count)
+        return out
+
     @classmethod
     def from_file(cls, path: str, device='cpu') -> 'RunningPerAgentWelford':
         """
@@ -383,7 +432,7 @@ class RunningPerAgentWelford:
         return s.mean, var
 
 
-class HardNormalizer:
+class HardNormalizer(Normalizer):
     """
     Hard normalization: maps values to [0, 1] using fixed or tracked bounds.
 
@@ -528,6 +577,9 @@ class HardNormalizer:
             self._running_max[name] = self._running_max[name].to(device)
         return self
 
+    def stats_summary(self) -> Dict[str, VarStats]:
+        return {}
+
     @classmethod
     def from_file(cls, path: str, device='cpu') -> 'HardNormalizer':
         state_dict = torch.load(path, map_location=device)
@@ -535,3 +587,14 @@ class HardNormalizer:
         normalizer.load_state_dict(state_dict)
         normalizer.to(device)
         return normalizer
+
+
+def make_normalizer(config) -> Normalizer:
+    norm_type = getattr(config.training, 'normalizer', 'welford')
+    if norm_type == 'hard':
+        v_min = config.shock.v_min
+        v_max = config.shock.v_max
+        print(f"Using HardNormalizer (ability: [{v_min:.4f}, {v_max:.4f}], {MONEY_KEY}: running)")
+        return HardNormalizer(fixed_bounds={"ability": (v_min, v_max)})
+    print("Using Welford normalizer (global mode)")
+    return RunningPerAgentWelford(batch_dim=0, agent_dim=None)

@@ -1,0 +1,111 @@
+% Requires \usepackage{booktabs} in the preamble.
+
+%==============================================================%
+% Table 1: Common calibrated parameters (shared by all settings)
+%==============================================================%
+\begin{table}[htbp]
+  \centering
+  \caption{Calibrated parameters (common across all settings)}
+  \label{tab:calibration_common}
+  \begin{tabular}{llc}
+    \toprule
+    Parameter & Description & Value \\
+    \midrule
+    \multicolumn{3}{l}{\emph{Preferences and technology}} \\
+    $\theta$  & CRRA coefficient                    & $1.0$ \\
+    $\beta$   & Discount factor                     & $0.96$ \\
+    $\gamma$  & Inverse Frisch elasticity           & $2.0$ \\
+    $A$       & Technology (TFP)                    & $1.0$ \\
+    $\alpha$  & Capital share of income             & $0.33$ \\
+    $r$       & Interest rate (return to savings)   & $0.04$ \\
+    $\delta$  & Depreciation rate of capital        & $0.06$ \\
+    \addlinespace
+    \multicolumn{3}{l}{\emph{Ability distribution (initial state)}} \\
+    $\mu_{a}$ & Ability mean                        & $10$ \\
+    $cv_{a}$  & Ability coefficient of variation    & $0.3$ \\
+    $a_{\min}$& Ability lower bound                 & $3.0$ \\
+    $a_{\max}$& Ability upper bound                 & $30.0$ \\
+    \addlinespace
+    \multicolumn{3}{l}{\emph{Ability shock process}} \\
+    $\rho_v$  & Persistence (AR(1))                 & $0.98$ \\
+    $\bar{v}$ & Long-run mean                       & $5$ \\
+    $p$       & Superstar arrival probability       & $2.2\times10^{-6}$ \\
+    $q$       & Superstar persistence               & $0.95$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+%==============================================================%
+% Table 2: Experiment design — parameters that vary by setting
+% (long format, one row per config, with config filename)
+%==============================================================%
+\begin{table}[htbp]
+  \centering
+  \caption{Experiment settings (varying parameters)}
+  \label{tab:calibration_settings}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{llccccccl}
+    \toprule
+    & & Markets & Uncertainty & \multicolumn{3}{c}{Tax parameters} & \\
+    \cmidrule(lr){5-7}
+    Setting & Tax regime & ($\mathrm{fix}$) & $\sigma_v$ & $\tau_y$ & $\tau_s$ & $(\lambda_y,\lambda_s)$ & Config file \\
+    \midrule
+    \multicolumn{8}{l}{\emph{Complete markets} ($\mathrm{fix}=\text{True}$)} \\
+    Complete, no tax     & ---        & True  & $0.2$ & $0$   & $0$   & $(0,\,0)$       & \texttt{complete\_notax\_hn} \\
+    Complete, linear     & Linear     & True  & $0.2$ & $0.3$ & $0.1$ & $(0,\,0)$       & \texttt{complete\_linear\_hn} \\
+    Complete, non-linear & Non-linear & True  & $0.2$ & $0.3$ & $0.1$ & $(0.18,\,0.1)$  & \texttt{complete\_nonlinear\_hn} \\
+    \addlinespace
+    \multicolumn{8}{l}{\emph{Incomplete markets} ($\mathrm{fix}=\text{False}$)} \\
+    Incomplete, no tax (low)      & ---        & False & $0.2$ & $0$   & $0$   & $(0,\,0)$      & \texttt{incomplete\_notax\_low\_uncer\_hn} \\
+    Incomplete, no tax (high)     & ---        & False & $0.5$ & $0$   & $0$   & $(0,\,0)$      & \texttt{incomplete\_notax\_high\_uncer\_hn} \\
+    Incomplete, linear (low)      & Linear     & False & $0.2$ & $0.3$ & $0.1$ & $(0,\,0)$      & \texttt{incomplete\_linear\_low\_uncer\_hn} \\
+    Incomplete, linear (high)     & Linear     & False & $0.5$ & $0.3$ & $0.1$ & $(0,\,0)$      & \texttt{incomplete\_linear\_high\_uncer\_hn} \\
+    Incomplete, non-linear (low)  & Non-linear & False & $0.2$ & $0.3$ & $0.1$ & $(0.18,\,0.1)$ & \texttt{incomplete\_nonlinear\_low\_uncer\_hn} \\
+    Incomplete, non-linear (high) & Non-linear & False & $0.5$ & $0.3$ & $0.1$ & $(0.18,\,0.1)$ & \texttt{incomplete\_nonlinear\_high\_uncer\_hn} \\
+    \bottomrule
+  \end{tabular}}
+  \begin{flushleft}
+  \footnotesize
+  \emph{Notes:} $\tau_y$ and $\tau_s$ are the income and saving tax rates;
+  $\lambda_y$ and $\lambda_s$ are the income- and saving-tax elasticities
+  (progressivity); $\lambda=0$ corresponds to a linear (proportional) tax.
+  Consumption tax is $0$ in all settings. $\sigma_v$ is the standard deviation
+  of the ability shock; it is only relevant under incomplete markets
+  (complete-markets settings hold ability fixed). All other parameters are as in
+  Table~\ref{tab:calibration_common}.
+  \end{flushleft}
+\end{table}
+
+%==============================================================%
+% Table 2b: Experiment design — wide format
+% (low vs. high uncertainty side by side)
+%==============================================================%
+\begin{table}[htbp]
+  \centering
+  \caption{Experiment settings (wide format: low vs.\ high uncertainty)}
+  \label{tab:calibration_settings_wide}
+  \begin{tabular}{lcccc cc}
+    \toprule
+    & Markets & $\tau_y$ & $\tau_s$ & $(\lambda_y,\lambda_s)$ & \multicolumn{2}{c}{$\sigma_v$} \\
+    \cmidrule(lr){6-7}
+    Tax regime & ($\mathrm{fix}$) & & & & Low ($0.2$) & High ($0.5$) \\
+    \midrule
+    \multicolumn{7}{l}{\emph{Complete markets} ($\mathrm{fix}=\text{True}$)} \\
+    No tax     & True & $0$   & $0$   & $(0,\,0)$      & \checkmark & --- \\
+    Linear     & True & $0.3$ & $0.1$ & $(0,\,0)$      & \checkmark & --- \\
+    Non-linear & True & $0.3$ & $0.1$ & $(0.18,\,0.1)$ & \checkmark & --- \\
+    \addlinespace
+    \multicolumn{7}{l}{\emph{Incomplete markets} ($\mathrm{fix}=\text{False}$)} \\
+    No tax     & False & $0$   & $0$   & $(0,\,0)$      & \checkmark & \checkmark \\
+    Linear     & False & $0.3$ & $0.1$ & $(0,\,0)$      & \checkmark & \checkmark \\
+    Non-linear & False & $0.3$ & $0.1$ & $(0.18,\,0.1)$ & \checkmark & \checkmark \\
+    \bottomrule
+  \end{tabular}
+  \begin{flushleft}
+  \footnotesize
+  \emph{Notes:} A \checkmark{} marks a config that exists in the experiment grid.
+  Under complete markets, ability is held fixed, so $\sigma_v$ is inert and only
+  the low-uncertainty file is provided. See Table~\ref{tab:calibration_common}
+  for common parameters.
+  \end{flushleft}
+\end{table}

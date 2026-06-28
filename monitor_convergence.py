@@ -175,7 +175,16 @@ def run_simulation(env, policy_net, main_state,
         if config is not None else None
     )
 
+    # Pick one focal agent to trace throughout the simulation
+    n_batch  = main_state.savings.shape[0]
+    n_agents = main_state.savings.shape[1]
+    focal_b  = np.random.randint(0, n_batch)
+    focal_a  = np.random.randint(0, n_agents)
     print(f"\nRunning {n_steps} simulation steps (snapshot every {snapshot_every})…")
+    print(f"  Focal agent: batch={focal_b}, agent={focal_a}")
+    print(f"  {'step':>5}  {'zeta_focal':>10}  {'m_focal':>8}  {'wage':>8}  {'ret':>8}")
+    print(f"  {'-'*5}  {'-'*10}  {'-'*8}  {'-'*8}  {'-'*8}")
+
     with torch.no_grad():
         for step in range(1, n_steps + 1):
             main_state, temp_state, (pA, oA), (pB, oB) = env.step(
@@ -213,21 +222,27 @@ def run_simulation(env, policy_net, main_state,
                 wage_np = float(temp_state.wage.detach().cpu().numpy().mean())
                 ret_np  = float(temp_state.ret.detach().cpu().numpy().mean())
 
+                zeta_focal = float(temp_state.savings_ratio[focal_b, focal_a].detach().cpu())
+                m_focal    = float(temp_state.money_disposable[focal_b, focal_a].detach().cpu())
+
                 snapshots.append({
-                    "step":  step,
-                    "m_t":   m_np,
-                    "c_t":   c_np,
-                    "a_t":   a_np,
-                    "zeta":  zeta_np,
-                    "wage":  wage_np,
-                    "ret":   ret_np,
+                    "step":        step,
+                    "m_t":         m_np,
+                    "c_t":         c_np,
+                    "a_t":         a_np,
+                    "zeta":        zeta_np,
+                    "wage":        wage_np,
+                    "ret":         ret_np,
+                    "zeta_focal":  zeta_focal,
+                    "m_focal":     m_focal,
                 })
+
+                print(f"  {step:5d}  {zeta_focal:10.4f}  {m_focal:8.3f}  {wage_np:8.4f}  {ret_np:8.4f}")
 
                 if step % (snapshot_every * 10) == 0:
                     loss_str = f"  loss={total_losses[-1]:.4f}" if total_losses else ""
-                    print(f"  step {step:5d}  |  mean(m)={m_np.mean():.3f}"
-                          f"  mean(c)={c_np.mean():.3f}"
-                          f"  wage={wage_np:.4f}  ret={ret_np:.4f}{loss_str}")
+                    print(f"         [agg] mean(m)={m_np.mean():.3f}"
+                          f"  mean(c)={c_np.mean():.3f}{loss_str}")
 
             del temp_state, pA, pB, oA, oB
 

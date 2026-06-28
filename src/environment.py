@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from src.utils.buildipnuts import build_inputs
 from src.env_state import MainState, TemporaryState, ParallelState, make_parallel
 from src.shocks import transition_ability_with_history
+from src.normalizer import MONEY_KEY
 
 
 class EconomyEnv:
@@ -74,7 +75,7 @@ class EconomyEnv:
         
         # - Normalize using self.normalizer if available
         ability_normalized = self.normalizer.transform("ability", ability, update=update_normalizer)
-        moneydisposable_normalized = self.normalizer.transform("moneydisposalbe", moneydisposable, update=update_normalizer)
+        moneydisposable_normalized = self.normalizer.transform(MONEY_KEY, moneydisposable, update=update_normalizer)
 
         # - Return dict of features
         model_inputs = build_inputs(moneydisposable=moneydisposable_normalized,

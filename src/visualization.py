@@ -12,6 +12,7 @@ from scipy import stats
 import wandb
 import torch
 from typing import Optional, Dict, List
+from src.normalizer import MONEY_KEY
 
 
 # =============================================================================
@@ -1833,30 +1834,23 @@ def plot_A1_1_MPS_hetero(
 # =============================================================================
 
 def _get_normalizer_stats(normalizer, key):
-    """Extract mean and std from normalizer for denormalization.
+    """Extract (offset, scale) from normalizer for display denormalization.
     Returns (mean, std) for Welford, or (lo, hi-lo) for HardNormalizer."""
-    if not hasattr(normalizer, '_stats'):
-        # HardNormalizer: return (offset, scale) so denorm = normalized * scale + offset
-        from src.normalizer import HardNormalizer
-        if isinstance(normalizer, HardNormalizer):
-            if key in normalizer.fixed_bounds:
-                lo, hi = normalizer.fixed_bounds[key]
-                return lo, hi - lo  # mean=lo, std=range (denorm: x*range + lo)
-            elif key in normalizer._running_min:
-                lo = float(normalizer._running_min[key].item())
-                hi = float(normalizer._running_max[key].item())
-                return lo, max(hi - lo, 1e-8)
-        return 0.0, 1.0
-    if key not in normalizer._stats:
-        return 0.0, 1.0
-    stats = normalizer._stats[key]
-    mean = stats.mean.detach().cpu().numpy()
-    var = stats.M2 / torch.clamp(stats.count - 1.0, min=1.0)
-    std = torch.sqrt(torch.clamp(var, min=0.0) + normalizer.eps)
-    std = torch.clamp(std, min=normalizer.min_std)
-    std = std.detach().cpu().numpy()
-    # For global mode, mean/std are scalars or 1D
-    return float(mean.flat[0]) if mean.size > 0 else 0.0, float(std.flat[0]) if std.size > 0 else 1.0
+    summary = normalizer.stats_summary()
+    if key in summary:
+        s = summary[key]
+        return s.mean, max(s.std, 1e-8)
+    # HardNormalizer returns empty summary — fall back to bounds
+    from src.normalizer import HardNormalizer
+    if isinstance(normalizer, HardNormalizer):
+        if key in normalizer.fixed_bounds:
+            lo, hi = normalizer.fixed_bounds[key]
+            return lo, max(hi - lo, 1e-8)
+        elif key in normalizer._running_min:
+            lo = float(normalizer._running_min[key].item())
+            hi = float(normalizer._running_max[key].item())
+            return lo, max(hi - lo, 1e-8)
+    return 0.0, 1.0
 
 
 def plot_input_output_pairwise(
@@ -1904,7 +1898,7 @@ def plot_input_output_pairwise(
     labor_np = labor.detach().cpu().numpy().flatten()
 
     # Get normalizer stats for denormalization
-    mean_m, std_m = _get_normalizer_stats(normalizer, "moneydisposalbe")
+    mean_m, std_m = _get_normalizer_stats(normalizer, MONEY_KEY)
     mean_v, std_v = _get_normalizer_stats(normalizer, "ability")
 
     inputs = [
@@ -1973,6 +1967,32 @@ def plot_input_output_pairwise(
                     c=q_colors[qi], alpha=0.15, s=3, rasterized=True,
                     label=f"{other_label} {q_labels[qi]}" if col == 0 else None
                 )
+
+            # ---- Within-band OLS slope lines (lm control) ----
+            # Fit y ~ x inside each quintile band, i.e. holding the OTHER input
+            # (ability for row 0, money for row 1) ~fixed. For the money->labor
+            # panel this partials ability out: each line's slope is the wealth/
+            # resource effect on labor net of ability composition. If the bands
+            # slope down while the overall cloud slopes up, the equilibrium
+            # positive correlation is an ability-composition artifact.
+            slope_txt = []
+            for qi in range(5):
+                mask = bin_indices == qi
+                if mask.sum() < 10:
+                    continue
+                xq, yq = x_data[mask], y_data[mask]
+                if np.ptp(xq) < 1e-8:
+                    continue
+                slope, intercept = np.polyfit(xq, yq, 1)
+                xline = np.linspace(xq.min(), xq.max(), 50)
+                ax.plot(xline, slope * xline + intercept,
+                        color=q_colors[qi], linewidth=2.2, zorder=4,
+                        solid_capstyle='round')
+                slope_txt.append(f"{q_labels[qi]}: {slope:+.2g}")
+            if slope_txt:
+                ax.text(0.97, 0.03, f"OLS slope ({other_label}-band)\n" + "\n".join(slope_txt),
+                        transform=ax.transAxes, fontsize=6.5, va='bottom', ha='right',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
 
             # ---- Focal agent overlay ----
             if focal_overlay is not None:

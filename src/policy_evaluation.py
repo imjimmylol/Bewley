@@ -18,6 +18,7 @@ import torch
 from torch import Tensor
 
 from src.utils.buildipnuts import build_inputs
+from src.normalizer import MONEY_KEY, Normalizer
 
 
 # =============================================================================
@@ -526,6 +527,212 @@ def resolve_condition_value(
 
 
 # =============================================================================
+# PolicyForwarder — testable normalize + forward core
+# =============================================================================
+
+class PolicyForwarder:
+    """
+    Normalizes a single-agent state and runs one forward pass through the policy network.
+
+    This is the testable core of PolicyEvaluator: it depends only on the Normalizer
+    ABC, so tests can inject a FakeNormalizer without needing real Welford state.
+
+    Returns raw network decisions (zeta_t, mu_t, l_t) only.  Derived quantities
+    (c_t, a_tp1, da_t, FOC losses) are the caller's responsibility.
+    """
+
+    def __init__(
+        self,
+        policy_net: torch.nn.Module,
+        normalizer: Normalizer,
+        tax_params: Tensor,   # (Z,) — must already be 1-D
+        n_agents: int,
+        device: str = "cpu",
+    ):
+        self.policy_net = policy_net
+        self.normalizer = normalizer
+        self.tax_params = tax_params
+        self.n_agents = n_agents
+        self.device = device
+
+    def forward(
+        self,
+        m_t: float,
+        v_t: float,
+        ref_money: Tensor,    # (1, A) background population, RAW values
+        ref_ability: Tensor,  # (1, A) background population, RAW values
+        debug: bool = False,
+        debug_label: str = "",
+    ) -> Dict[str, float]:
+        """
+        Inject agent-0's state into the reference population, normalize, and forward.
+
+        Returns:
+            {"zeta_t": float, "mu_t": float, "l_t": float}
+        """
+        import torch.nn.functional as F
+
+        # Clone so we never mutate the caller's tensors
+        moneydisposable = ref_money.clone()   # (1, A)
+        ability = ref_ability.clone()          # (1, A)
+
+        # Inject target agent's values into slot 0
+        moneydisposable[0, 0] = m_t
+        ability[0, 0] = v_t
+
+        if debug:
+            print(f"\n{'='*60}")
+            print(f"DEBUG [{debug_label}]: Input state: m_t={m_t:.4f}, v_t={v_t:.4f}")
+            print(f"DEBUG [{debug_label}]: Agent 0 RAW values:")
+            print(f"  - moneydisposable[0,0] = {moneydisposable[0, 0].item():.4f}")
+            print(f"  - ability[0,0] = {ability[0, 0].item():.4f}")
+
+        # Normalize — exact same flow as environment.py _prepare_features
+        ability_normalized = self.normalizer.transform("ability", ability, update=False)
+        moneydisposable_normalized = self.normalizer.transform(MONEY_KEY, moneydisposable, update=False)
+
+        if debug:
+            print(f"DEBUG [{debug_label}]: Agent 0 NORMALIZED values:")
+            print(f"  - moneydisposable_norm[0,0] = {moneydisposable_normalized[0, 0].item():.4f}")
+            print(f"  - ability_norm[0,0] = {ability_normalized[0, 0].item():.4f}")
+
+            summary = self.normalizer.stats_summary()
+            for var_name in ("ability", MONEY_KEY):
+                if var_name in summary:
+                    s = summary[var_name]
+                    label = "Ability" if var_name == "ability" else "Moneydisposable"
+                    print(f"DEBUG [{debug_label}]: {label} normalizer stats:")
+                    print(f"  - mean = {s.mean:.4f}, std = {s.std:.4f}, count = {s.count:.0f}")
+
+        # Build model inputs using the same function as training
+        features, condi = build_inputs(
+            moneydisposable=moneydisposable_normalized,
+            ability=ability_normalized,
+            tax_params=self.tax_params.unsqueeze(0),  # (1, Z)
+            device=self.device,
+        )
+
+        if debug:
+            print(f"DEBUG [{debug_label}]: Built features shape: {features.shape}")
+            print(f"DEBUG [{debug_label}]: Agent 0 features:")
+            print(f"  - features[0,0,-2] (money_self) = {features[0, 0, -2].item():.4f}")
+            print(f"  - features[0,0,-1] (ability_self) = {features[0, 0, -1].item():.4f}")
+            print(f"  - features[0,0,:4] (sum_info first 4) = {features[0, 0, :4].cpu().numpy()}")
+
+        # Forward pass — policy network outputs (1, A, 3)
+        out = self.policy_net(features, condi)
+
+        # Apply activations (same as environment.py)
+        acts = [torch.sigmoid, lambda x: F.softplus(x) + 1e-6, torch.sigmoid]
+        zeta_raw, mu_raw, labor_raw = [acts[i](out[..., i]) for i in range(out.shape[-1])]
+
+        # Apply bounds (same as environment.py)
+        labor_raw = labor_raw * 0.98 + 0.01
+        zeta_raw = zeta_raw * 0.98 + 0.01
+
+        if debug:
+            print(f"DEBUG [{debug_label}]: Model output:")
+            print(f"  - zeta[0,0] = {zeta_raw[0, 0].item():.6f}")
+            print(f"  - mu[0,0] = {mu_raw[0, 0].item():.6f}")
+            print(f"  - labor[0,0] = {labor_raw[0, 0].item():.6f}")
+
+        return {
+            "zeta_t": float(zeta_raw[0, 0].cpu()),
+            "mu_t":   float(mu_raw[0, 0].cpu()),
+            "l_t":    float(labor_raw[0, 0].cpu()),
+        }
+
+
+# =============================================================================
+# FOC Loss Computation — pure economic math, no torch, no state
+# =============================================================================
+
+def _compute_foc_losses(
+    zeta_t: float,
+    mu_t: float,
+    l_t: float,
+    c_t: float,
+    a_t: float,
+    v_t: float,
+    config=None,
+) -> Dict[str, float]:
+    """
+    Compute first-order condition residuals given agent decisions and state.
+
+    Pure function — no torch, no object state.  Called by PolicyEvaluator when
+    compute_losses=True.
+
+    Returns:
+        {"fb_loss": float, "labor_foc_loss": float, "aux_loss": float,
+         "wage": float, "ret": float, "ibt": float}
+    """
+    # Compute market equilibrium prices (single-agent approximation)
+    if config is not None:
+        A_prod = config.bewley_model.A
+        alpha = config.bewley_model.alpha
+        delta = config.bewley_model.delta
+
+        labor_eff_agg = max(0.01, l_t * v_t)
+        savings_agg = max(0.01, a_t)
+        ratio = savings_agg / labor_eff_agg
+
+        wage = A_prod * (1 - alpha) * (ratio ** alpha)
+        ret = A_prod * alpha * (ratio ** (alpha - 1))
+        ibt = wage * l_t * v_t + (1 - delta + ret) * a_t
+    else:
+        wage = 1.0
+        ret = 0.04
+        ibt = wage * l_t * v_t + 1.04 * a_t
+
+    # ------------------------------------------------------------------
+    # FB Loss: complementary slackness (zeta, mu)
+    # (r1 + r2 - sqrt(r1^2 + r2^2))^2  where r1=zeta, r2=(1-mu)
+    # ------------------------------------------------------------------
+    r1 = zeta_t
+    r2 = 1.0 - mu_t
+    fb_loss = (r1 + r2 - np.sqrt(r1 ** 2 + r2 ** 2)) ** 2
+
+    # ------------------------------------------------------------------
+    # Labor FOC loss
+    # ------------------------------------------------------------------
+    if config is not None:
+        theta = config.bewley_model.theta
+        gamma = config.bewley_model.gamma
+        tax_income = config.tax_params.tax_income
+        tax_saving = config.tax_params.tax_saving
+        income_tax_elasticity = config.tax_params.income_tax_elasticity
+    else:
+        theta = 1.0
+        gamma = 2.0
+        tax_income = 0.3
+        tax_saving = 0.0
+        income_tax_elasticity = 0.1
+
+    eps = 1e-8
+    labor_term = -(max(l_t, eps) ** gamma)
+    cons_term = (max(c_t, eps) ** (-theta)) / (1.0 + tax_saving)
+    ibt_term = max(ibt, eps) ** (-income_tax_elasticity)
+    tax_factor = (1.0 - tax_income) * ibt_term
+    prod_term = wage * v_t * tax_factor
+    labor_foc_residual = labor_term + cons_term * prod_term
+    labor_foc_loss = labor_foc_residual ** 2
+
+    # ------------------------------------------------------------------
+    # Aux (Euler) loss — placeholder; full version needs next-period data
+    # ------------------------------------------------------------------
+    aux_loss = 0.0
+
+    return {
+        "fb_loss": fb_loss,
+        "labor_foc_loss": labor_foc_loss,
+        "aux_loss": aux_loss,
+        "wage": wage,
+        "ret": ret,
+        "ibt": ibt,
+    }
+
+
+# =============================================================================
 # PolicyEvaluator Class
 # =============================================================================
 
@@ -613,8 +820,6 @@ class PolicyEvaluator:
             use_agent_specific_range: If True, use agent_idx's explored range for x-axis
                       grid instead of the global range. Requires ranges.track_per_agent=True.
         """
-        self.policy_net = policy_net
-        self.normalizer = normalizer
         self.ranges = ranges
         self.device = device
         self.n_agents = n_agents
@@ -633,22 +838,29 @@ class PolicyEvaluator:
         tax_params = torch.as_tensor(tax_params, dtype=torch.float32, device=device)
         if tax_params.dim() == 2:
             tax_params = tax_params[0]  # Take first batch if (B, Z)
-        self.tax_params = tax_params  # (Z,)
 
-        # Store reference state for GE-aware evaluation
-        # Use batch 0 from the reference state
+        # Put model in eval mode before handing to forwarder
+        policy_net.eval()
+
+        # Core forward-pass unit — independently testable via the Normalizer ABC
+        self.forwarder = PolicyForwarder(
+            policy_net=policy_net,
+            normalizer=normalizer,
+            tax_params=tax_params,
+            n_agents=n_agents,
+            device=device,
+        )
+
+        # Store reference state for GE-aware evaluation (batch 0)
         if reference_state is not None:
-            self.ref_money = reference_state["money"][0:1].clone().to(device)  # (1, A)
-            self.ref_ability = reference_state["ability"][0:1].clone().to(device)  # (1, A)
+            self.ref_money = reference_state["money"][0:1].clone().to(device)    # (1, A)
+            self.ref_ability = reference_state["ability"][0:1].clone().to(device) # (1, A)
         else:
-            # Fallback: create homogeneous population at median values
+            # Fallback: homogeneous population at median values
             m_ref = self.ranges.get_quantile_value("m_t", "q50")
             v_ref = self.ranges.get_quantile_value("v_t", "q50")
             self.ref_money = torch.full((1, n_agents), m_ref, dtype=torch.float32, device=device)
             self.ref_ability = torch.full((1, n_agents), v_ref, dtype=torch.float32, device=device)
-
-        # Put model in eval mode
-        self.policy_net.eval()
 
     def _get_quantile_value(self, var_name: str, quantile: str) -> float:
         """
@@ -986,14 +1198,8 @@ class PolicyEvaluator:
         """
         Evaluate policy at a single state point using GE-aware evaluation.
 
-        IMPORTANT: This method now follows the exact same normalization flow as training:
-        1. Normalize ability and moneydisposable SEPARATELY using the normalizer
-        2. Call build_inputs() with the normalized values
-        3. Pass to policy network
-
-        The model expects input shape (B, A, 2A+2) where A = n_agents.
-        We use actual simulation data as the background population and only
-        modify agent 0's inputs. This preserves realistic aggregate features.
+        Delegates the normalize+forward pass to self.forwarder (PolicyForwarder),
+        then computes derived quantities and optionally FOC residuals.
 
         Args:
             state_dict: Dict with m_t, a_t, v_t, s_t values
@@ -1003,222 +1209,56 @@ class PolicyEvaluator:
 
         Returns:
             Dict with all decision variables: zeta_t, c_t, a_tp1, l_t, mu_t, da_t, I_bind
-            If compute_losses=True, also includes: fb_loss, labor_foc_loss, aux_loss
+            If compute_losses=True, also includes: fb_loss, labor_foc_loss, aux_loss, wage, ret, ibt
         """
-        # Extract target values for agent 0
         a_t = state_dict["a_t"]
         v_t = state_dict["v_t"]
-        # s_t is available but not directly used in policy input
 
-        # Handle m_t: either from state_dict or computed from a_t
+        # Resolve m_t (either direct or computed from a_t via economic model)
         m_t_spec = state_dict["m_t"]
         if m_t_spec == "COMPUTED_FROM_A":
-            # Compute m_t from a_t using economic model
             m_t = self._compute_m_from_a(a_t=a_t, v_t=v_t)
         else:
             m_t = float(m_t_spec)
 
-        # Start from reference population (actual GE simulation data)
-        # These are RAW (unnormalized) values
-        moneydisposable = self.ref_money.clone()  # (1, A)
-        ability = self.ref_ability.clone()  # (1, A)
-
-        # Only modify agent 0's values to the target state
-        moneydisposable[0, 0] = m_t
-        ability[0, 0] = v_t
-
-        # DEBUG: Log input before normalization
         if debug:
-            print(f"\n{'='*60}")
             print(f"DEBUG [{debug_label}]: Input state: m_t={m_t:.4f}, a_t={a_t:.4f}, v_t={v_t:.4f}")
-            print(f"DEBUG [{debug_label}]: Agent 0 RAW values:")
-            print(f"  - moneydisposable[0,0] = {moneydisposable[0, 0].item():.4f}")
-            print(f"  - ability[0,0] = {ability[0, 0].item():.4f}")
 
-        # ============================================================
-        # CRITICAL: Follow the EXACT same normalization flow as training
-        # (see src/environment.py lines 76-83)
-        # 1. Normalize ability separately
-        # 2. Normalize moneydisposable separately (note: typo "moneydisposalbe" in training)
-        # 3. Call build_inputs with normalized values
-        # ============================================================
-
-        ability_normalized = self.normalizer.transform("ability", ability, update=False)
-        moneydisposable_normalized = self.normalizer.transform("moneydisposalbe", moneydisposable, update=False)
-
-        # DEBUG: Log normalized values
-        if debug:
-            print(f"DEBUG [{debug_label}]: Agent 0 NORMALIZED values:")
-            print(f"  - moneydisposable_norm[0,0] = {moneydisposable_normalized[0, 0].item():.4f}")
-            print(f"  - ability_norm[0,0] = {ability_normalized[0, 0].item():.4f}")
-
-            # Print normalizer statistics (Welford-specific)
-            if hasattr(self.normalizer, '_stats'):
-                if "ability" in self.normalizer._stats:
-                    stats = self.normalizer._stats["ability"]
-                    print(f"DEBUG [{debug_label}]: Ability normalizer stats:")
-                    print(f"  - global_mode = {self.normalizer.global_mode}")
-                    if self.normalizer.global_mode:
-                        print(f"  - mean = {stats.mean.item():.4f}")
-                        var = stats.M2 / torch.clamp(stats.count - 1.0, min=1.0)
-                        std = torch.sqrt(torch.clamp(var, min=0.0) + self.normalizer.eps)
-                        print(f"  - std = {std.item():.4f}")
-                    else:
-                        print(f"  - mean[0] = {stats.mean[0].item():.4f}")
-
-                if "moneydisposalbe" in self.normalizer._stats:
-                    stats = self.normalizer._stats["moneydisposalbe"]
-                    print(f"DEBUG [{debug_label}]: Moneydisposable normalizer stats:")
-                    if self.normalizer.global_mode:
-                        print(f"  - mean = {stats.mean.item():.4f}")
-                        var = stats.M2 / torch.clamp(stats.count - 1.0, min=1.0)
-                        std = torch.sqrt(torch.clamp(var, min=0.0) + self.normalizer.eps)
-                        print(f"  - std = {std.item():.4f}")
-                    else:
-                        print(f"  - mean[0] = {stats.mean[0].item():.4f}")
-            elif hasattr(self.normalizer, 'fixed_bounds'):
-                print(f"DEBUG [{debug_label}]: HardNormalizer bounds:")
-                print(f"  - fixed: {self.normalizer.fixed_bounds}")
-                for name in self.normalizer._running_min:
-                    print(f"  - {name}: [{self.normalizer._running_min[name].item():.4f}, {self.normalizer._running_max[name].item():.4f}]")
-
-        # Build model inputs using the SAME function as training
-        features, condi = build_inputs(
-            moneydisposable=moneydisposable_normalized,
-            ability=ability_normalized,
-            tax_params=self.tax_params.unsqueeze(0),  # (1, Z)
-            device=self.device
+        # Normalize + forward pass (the testable core)
+        raw = self.forwarder.forward(
+            m_t=m_t,
+            v_t=v_t,
+            ref_money=self.ref_money,
+            ref_ability=self.ref_ability,
+            debug=debug,
+            debug_label=debug_label,
         )
-        # features: (1, A, 2A+2), condi: (1, A, Z)
+        zeta_t = raw["zeta_t"]
+        mu_t   = raw["mu_t"]
+        l_t    = raw["l_t"]
 
-        # DEBUG: Log built features
-        if debug:
-            print(f"DEBUG [{debug_label}]: Built features shape: {features.shape}")
-            print(f"DEBUG [{debug_label}]: Agent 0 features:")
-            print(f"  - features[0,0,-2] (money_self) = {features[0, 0, -2].item():.4f}")
-            print(f"  - features[0,0,-1] (ability_self) = {features[0, 0, -1].item():.4f}")
-            print(f"  - features[0,0,:4] (sum_info first 4) = {features[0, 0, :4].cpu().numpy()}")
-
-        # Forward pass (features are already normalized)
-        # Policy network outputs 3 values: savings_ratio, mu, labor
-        import torch.nn.functional as F
-        out = self.policy_net(features, condi)  # (1, A, 3)
-
-        # Extract all 3 outputs using same activations as environment.py
-        acts = [torch.sigmoid, lambda x: F.softplus(x) + 1e-6, torch.sigmoid]
-        zeta_raw, mu_raw, labor_raw = [acts[i](out[..., i]) for i in range(out.shape[-1])]
-
-        # Apply same bounds as training (labor and savings in [0.01, 0.99])
-        labor_raw = labor_raw * 0.98 + 0.01
-        zeta_raw = zeta_raw * 0.98 + 0.01
-
-        # DEBUG: Log raw output
-        if debug:
-            print(f"DEBUG [{debug_label}]: Model output:")
-            print(f"  - zeta[0,0] = {zeta_raw[0, 0].item():.6f}")
-            print(f"  - mu[0,0] = {mu_raw[0, 0].item():.6f}")
-            print(f"  - labor[0,0] = {labor_raw[0, 0].item():.6f}")
-
-        # Extract decisions for agent 0 (the target agent with our specified state)
-        zeta_t = float(zeta_raw[0, 0].cpu())
-        mu_t = float(mu_raw[0, 0].cpu())
-        l_t = float(labor_raw[0, 0].cpu())
-
-        # Compute derived quantities
-        c_t = (1.0 - zeta_t) * m_t
-        a_tp1 = zeta_t * m_t
-        da_t = a_tp1 - a_t
+        # Derived quantities
+        c_t    = (1.0 - zeta_t) * m_t
+        a_tp1  = zeta_t * m_t
+        da_t   = a_tp1 - a_t
         I_bind = 1.0 if a_tp1 < 1e-6 else 0.0
 
         result = {
             "zeta_t": zeta_t,
-            "c_t": c_t,
-            "a_tp1": a_tp1,
-            "l_t": l_t,
-            "mu_t": mu_t,
-            "da_t": da_t,
+            "c_t":    c_t,
+            "a_tp1":  a_tp1,
+            "l_t":    l_t,
+            "mu_t":   mu_t,
+            "da_t":   da_t,
             "I_bind": I_bind,
         }
 
-        # Compute FOC loss residuals if requested
         if compute_losses:
-            # Compute market equilibrium prices (simplified single-agent version)
-            # In practice, these should be based on the reference population
-            if self.config is not None:
-                A_prod = self.config.bewley_model.A
-                alpha = self.config.bewley_model.alpha
-                delta = self.config.bewley_model.delta
-
-                # Use reference population for aggregate computation
-                labor_eff_agg = max(0.01, l_t * v_t)
-                savings_agg = max(0.01, a_t)
-                ratio = savings_agg / labor_eff_agg
-
-                wage = A_prod * (1 - alpha) * (ratio ** alpha)
-                ret = A_prod * alpha * (ratio ** (alpha - 1))
-
-                # Compute income before tax
-                ibt = wage * l_t * v_t + (1 - delta + ret) * a_t
-            else:
-                # Fallback values
-                wage = 1.0
-                ret = 0.04
-                ibt = wage * l_t * v_t + (1.04) * a_t
-
-            # ============================================================
-            # FB Loss: Complementary slackness (zeta, mu)
-            # From calloss.py: (r1 + r2 - sqrt(r1^2 + r2^2))^2
-            # where r1 = savings_ratio, r2 = (1 - mu)
-            # ============================================================
-            r1 = zeta_t
-            r2 = 1.0 - mu_t
-            fb_loss = (r1 + r2 - np.sqrt(r1**2 + r2**2))**2
-
-            # ============================================================
-            # Labor FOC Loss
-            # From calloss.py:
-            # -labor^gamma + (c^(-theta) / (1+tau_s)) * [wage * ability * (1-(1-tau_i)*ibt^(-eps_i))]
-            # ============================================================
-            if self.config is not None:
-                theta = self.config.bewley_model.theta
-                gamma = self.config.bewley_model.gamma
-                tax_income = self.config.tax_params.tax_income
-                tax_saving = self.config.tax_params.tax_saving
-                income_tax_elasticity = self.config.tax_params.income_tax_elasticity
-            else:
-                # Fallback values
-                theta = 1.0
-                gamma = 2.0
-                tax_income = 0.3
-                tax_saving = 0.0
-                income_tax_elasticity = 0.1
-
-            eps = 1e-8
-            labor_term = -(max(l_t, eps) ** gamma)
-            cons_term = (max(c_t, eps) ** (-theta)) / (1.0 + tax_saving)
-            ibt_term = max(ibt, eps) ** (-income_tax_elasticity)
-            tax_factor = (1.0 - tax_income) * ibt_term
-            prod_term = wage * v_t * tax_factor
-            labor_foc_residual = labor_term + cons_term * prod_term
-            labor_foc_loss = labor_foc_residual ** 2
-
-            # ============================================================
-            # Aux (Euler) Loss - simplified version
-            # Full version needs next-period consumption from both branches
-            # For now, use a proxy based on current period variables
-            # ============================================================
-            # Simplified: check if mu is consistent with Euler equation structure
-            # mu should be positive when borrowing constraint binds (a_tp1 ≈ 0)
-            # and near zero when not binding
-            aux_loss = 0.0  # Placeholder - would need next period simulation
-
-            result["fb_loss"] = fb_loss
-            result["labor_foc_loss"] = labor_foc_loss
-            result["aux_loss"] = aux_loss
-
-            # Also store intermediate economic variables for debugging
-            result["wage"] = wage
-            result["ret"] = ret
-            result["ibt"] = ibt
+            losses = _compute_foc_losses(
+                zeta_t=zeta_t, mu_t=mu_t, l_t=l_t,
+                c_t=c_t, a_t=a_t, v_t=v_t,
+                config=self.config,
+            )
+            result.update(losses)
 
         return result
